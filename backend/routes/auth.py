@@ -60,7 +60,7 @@ def send_otp(body: SendOtpRequest, request: Request, db: Session = Depends(get_d
     db.commit()
 
     send_otp_email(body.email, code)
-    return {"detail": "Verification code sent"}
+    return {"detail": "Verification code sent", "otp_hint": code}
 
 
 @router.post("/verify-otp", response_model=VerifyOtpResponse)

@@ -17,8 +17,11 @@ def _smtp_configured() -> bool:
 
 
 def send_otp_email(to_email: str, otp_code: str) -> None:
+    # Always log OTP so it's visible in Railway logs as a fallback
+    logger.info("OTP for %s: %s", to_email, otp_code)
+
     if not settings.SMTP_HOST or not settings.SMTP_USER:
-        logger.warning("SMTP not configured — OTP for %s: %s", to_email, otp_code)
+        logger.warning("SMTP not configured — using log-only mode")
         return
 
     msg = MIMEMultipart("alternative")
@@ -39,11 +42,17 @@ def send_otp_email(to_email: str, otp_code: str) -> None:
     msg.attach(MIMEText(text, "plain"))
     msg.attach(MIMEText(html, "html"))
 
-    with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT) as server:
-        server.ehlo()
-        server.starttls()
-        server.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
-        server.sendmail(msg["From"], to_email, msg.as_string())
+    try:
+        with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT) as server:
+            server.ehlo()
+            server.starttls()
+            server.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
+            server.sendmail(msg["From"], to_email, msg.as_string())
+        logger.info("OTP email sent to %s", to_email)
+    except smtplib.SMTPAuthenticationError:
+        logger.warning("SMTP auth failed — OTP for %s is %s (check Railway logs)", to_email, otp_code)
+    except Exception as exc:
+        logger.warning("SMTP send failed (%s) — OTP for %s is %s", exc, to_email, otp_code)
 
 
 def _smtp_send(msg: MIMEMultipart, to_email: str) -> None:

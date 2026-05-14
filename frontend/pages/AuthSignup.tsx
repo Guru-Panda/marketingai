@@ -34,8 +34,9 @@ export default function AuthSignup() {
     setLoading(true);
     setStatus(null);
     try {
-      await api.post("/auth/send-otp", { email });
-      setStatus({ type: "success", message: "Verification code sent — check your inbox." });
+      const res = await api.post<{ detail: string; otp_hint?: string }>("/auth/send-otp", { email });
+      const hint = res.otp_hint ? ` (code: ${res.otp_hint})` : "";
+      setStatus({ type: "success", message: `Verification code sent — check your inbox.${hint}` });
       setStep("otp");
     } catch (err) {
       setStatus({ type: "error", message: err instanceof Error ? err.message : "Failed to send code" });
