@@ -7,8 +7,6 @@ from backend.database import settings
 
 logger = logging.getLogger(__name__)
 
-# Set to False after the first auth failure so we stop spamming the log
-# with the same traceback on every single lead save.
 _smtp_available: bool | None = None  # None = untested, True = ok, False = broken
 
 
@@ -16,11 +14,24 @@ def _smtp_configured() -> bool:
     return bool(settings.SMTP_HOST and settings.SMTP_USER and settings.SMTP_PASSWORD)
 
 
+def _make_connection():
+    """Return an authenticated SMTP connection. Uses SSL (465) or STARTTLS (587)."""
+    if settings.SMTP_PORT == 465:
+        server = smtplib.SMTP_SSL(settings.SMTP_HOST, 465, timeout=15)
+    else:
+        server = smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT, timeout=15)
+        server.ehlo()
+        server.starttls()
+    server.ehlo()
+    server.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
+    return server
+
+
 def send_otp_email(to_email: str, otp_code: str) -> None:
     # Always log OTP so it's visible in Railway logs as a fallback
     logger.info("OTP for %s: %s", to_email, otp_code)
 
-    if not settings.SMTP_HOST or not settings.SMTP_USER:
+    if not _smtp_configured():
         logger.warning("SMTP not configured — using log-only mode")
         return
 
@@ -43,10 +54,7 @@ def send_otp_email(to_email: str, otp_code: str) -> None:
     msg.attach(MIMEText(html, "html"))
 
     try:
-        with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT, timeout=8) as server:
-            server.ehlo()
-            server.starttls()
-            server.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
+        with _make_connection() as server:
             server.sendmail(msg["From"], to_email, msg.as_string())
         logger.info("OTP email sent to %s", to_email)
     except smtplib.SMTPAuthenticationError:
@@ -59,17 +67,14 @@ def _smtp_send(msg: MIMEMultipart, to_email: str) -> None:
     global _smtp_available
 
     if _smtp_available is False:
-        return  # already known broken — skip silently
+        return
 
     if not _smtp_configured():
         logger.debug("SMTP not configured — skipping send to %s", to_email)
         return
 
     try:
-        with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT) as server:
-            server.ehlo()
-            server.starttls()
-            server.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
+        with _make_connection() as server:
             server.sendmail(msg["From"], to_email, msg.as_string())
         _smtp_available = True
     except smtplib.SMTPAuthenticationError:
