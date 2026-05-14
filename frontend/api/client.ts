@@ -20,8 +20,17 @@ async function request<T>(
   });
 
   if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error(err.detail ?? "Request failed");
+    const text = await res.text().catch(() => "");
+    let detail: string;
+    try {
+      const err = JSON.parse(text);
+      if (typeof err.detail === "string") detail = err.detail;
+      else if (Array.isArray(err.detail)) detail = err.detail.map((e: { msg?: string }) => e.msg).join(", ");
+      else detail = text || res.statusText || `HTTP ${res.status}`;
+    } catch {
+      detail = text || res.statusText || `HTTP ${res.status}`;
+    }
+    throw new Error(detail || `HTTP ${res.status} error`);
   }
 
   if (res.status === 204) return undefined as T;
