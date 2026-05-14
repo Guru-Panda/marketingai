@@ -5,7 +5,6 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 from fastapi import FastAPI, Request
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse, Response
 
 from backend.data_retention import delete_old_leads
@@ -47,22 +46,28 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(title="Marketing API", version="1.0.0", lifespan=lifespan)
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+_CORS_HEADERS = {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+    "Access-Control-Allow-Headers": "*",
+    "Access-Control-Max-Age": "600",
+}
 
 
 @app.middleware("http")
-async def security_headers(request: Request, call_next) -> Response:
+async def cors_and_security(request: Request, call_next) -> Response:
+    # Handle CORS preflight
+    if request.method == "OPTIONS":
+        return Response(status_code=200, headers=_CORS_HEADERS)
+
     response = await call_next(request)
+
+    # Add CORS + security headers to every response
+    for k, v in _CORS_HEADERS.items():
+        response.headers[k] = v
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
-    response.headers["X-XSS-Protection"] = "1; mode=block"
     return response
 
 app.include_router(auth.router)
@@ -74,20 +79,6 @@ app.include_router(leads.router)
 app.include_router(admin.router)
 
 
-@app.options("/{rest_of_path:path}", include_in_schema=False)
-async def preflight_handler(rest_of_path: str):
-    """Catch-all OPTIONS handler for CORS preflight requests."""
-    return Response(
-        status_code=200,
-        headers={
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
-            "Access-Control-Allow-Headers": "*",
-            "Access-Control-Max-Age": "600",
-        },
-    )
-
-
 @app.get("/", include_in_schema=False)
 def root():
     return RedirectResponse(url="/docs")
@@ -95,4 +86,4 @@ def root():
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "version": "cors-fix-v3"}
+    return {"status": "ok", "version": "cors-fix-v4"}
