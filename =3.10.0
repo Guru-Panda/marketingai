@@ -1,0 +1,16 @@
+Defaulting to user installation because normal site-packages is not writeable
+Collecting apscheduler
+  Downloading apscheduler-3.11.2-py3-none-any.whl.metadata (6.4 kB)
+Collecting tzlocal>=3.0 (from apscheduler)
+  Downloading tzlocal-5.3.1-py3-none-any.whl.metadata (7.6 kB)
+Collecting tzdata (from tzlocal>=3.0->apscheduler)
+  Downloading tzdata-2026.2-py2.py3-none-any.whl.metadata (1.4 kB)
+Downloading apscheduler-3.11.2-py3-none-any.whl (64 kB)
+Downloading tzlocal-5.3.1-py3-none-any.whl (18 kB)
+Downloading tzdata-2026.2-py2.py3-none-any.whl (349 kB)
+Installing collected packages: tzdata, tzlocal, apscheduler
+
+Successfully installed apscheduler-3.11.2 tzdata-2026.2 tzlocal-5.3.1
+
+[notice] A new release of pip is available: 25.1.1 -> 26.1
+[notice] To update, run: python.exe -m pip install --upgrade pip
