@@ -15,8 +15,8 @@ from backend.monitor.sync import run_sync
 from backend.routes import auth, business, channels, leads, users
 from backend.routes import admin
 
-run_migrations()
 Base.metadata.create_all(bind=engine)
+run_migrations()
 
 _scheduler = AsyncIOScheduler(timezone="UTC")
 _scheduler.add_job(

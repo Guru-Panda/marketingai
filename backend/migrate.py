@@ -1,7 +1,7 @@
 """
 Lightweight column-level migrations — works with both SQLite and PostgreSQL.
-Called at startup before Base.metadata.create_all so new columns are
-added to existing tables without dropping any data.
+Called at startup AFTER Base.metadata.create_all so tables already exist
+and we only add missing columns without dropping any data.
 """
 import logging
 from sqlalchemy import text
