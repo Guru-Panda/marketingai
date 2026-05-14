@@ -74,6 +74,20 @@ app.include_router(leads.router)
 app.include_router(admin.router)
 
 
+@app.options("/{rest_of_path:path}", include_in_schema=False)
+async def preflight_handler(rest_of_path: str):
+    """Catch-all OPTIONS handler for CORS preflight requests."""
+    return Response(
+        status_code=200,
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+            "Access-Control-Allow-Headers": "*",
+            "Access-Control-Max-Age": "600",
+        },
+    )
+
+
 @app.get("/", include_in_schema=False)
 def root():
     return RedirectResponse(url="/docs")
@@ -81,4 +95,4 @@ def root():
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    return {"status": "ok", "version": "cors-fix-v3"}
