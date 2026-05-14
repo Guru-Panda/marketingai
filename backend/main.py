@@ -47,19 +47,12 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(title="Marketing API", version="1.0.0", lifespan=lifespan)
 
-_allowed_origins = list({
-    settings.FRONTEND_URL,
-    "http://localhost:5173",
-    "http://localhost:5174",
-})
-
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=_allowed_origins,
-    allow_origin_regex=r"https://.*\.vercel\.app",
-    allow_credentials=True,
-    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type"],
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
