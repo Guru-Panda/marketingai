@@ -114,7 +114,9 @@ class StrategyResponse(BaseModel):
     main_problem: str
     ideal_customer: str
     keywords: list[Any]
+    buyer_phrases: list[Any] = []
     target_locations: list[Any]
+    intent_threshold: float | None = None
     created_at: datetime
 
     model_config = {"from_attributes": True}
