@@ -98,6 +98,15 @@ class StrategyCreate(BaseModel):
     target_locations: list[str] = []
 
 
+class StrategyPatch(BaseModel):
+    title: str | None = None
+    main_problem: str | None = None
+    ideal_customer: str | None = None
+    keywords: list[str] | None = None
+    target_locations: list[str] | None = None
+    buyer_phrases: list[str] | None = None
+
+
 class StrategyResponse(BaseModel):
     id: int
     user_id: int

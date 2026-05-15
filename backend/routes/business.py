@@ -9,7 +9,7 @@ from backend.dependencies import get_verified_user
 from backend.model import BusinessStrategy, ChannelStatus, SuggestedChannel, User
 from backend.schemas import (
     AnalyzeRequest, AnalyzeResponse,
-    ChannelResponse, StrategyCreate, StrategyResponse, StrategyTitle,
+    ChannelResponse, StrategyCreate, StrategyPatch, StrategyResponse, StrategyTitle,
 )
 from backend.business_analyzer import analyze_business, suggest_channels
 from backend.monitor.channel_resolver import resolve_channel_url
@@ -142,6 +142,26 @@ def get_strategy(
     ).first()
     if not strategy:
         raise HTTPException(status_code=404, detail="Strategy not found")
+    return strategy
+
+
+@router.patch("/{strategy_id}", response_model=StrategyResponse)
+def update_strategy(
+    strategy_id: int,
+    body: StrategyPatch,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_verified_user),
+):
+    strategy = db.query(BusinessStrategy).filter(
+        BusinessStrategy.id == strategy_id,
+        BusinessStrategy.user_id == current_user.id,
+    ).first()
+    if not strategy:
+        raise HTTPException(status_code=404, detail="Strategy not found")
+    for field, value in body.model_dump(exclude_none=True).items():
+        setattr(strategy, field, value)
+    db.commit()
+    db.refresh(strategy)
     return strategy
 
 
