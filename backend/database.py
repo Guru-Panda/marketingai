@@ -20,7 +20,7 @@ class Settings(BaseSettings):
     SMTP_FROM: str = ""
     DISCORD_BOT_TOKEN: str = ""
     HUNTER_API_KEY: str = ""
-    SYNC_INTERVAL_HOURS: int = 4
+    SYNC_INTERVAL_HOURS: float = 4
     INTENT_THRESHOLD: float = 0.7
     FRONTEND_URL: str = "http://localhost:5173"
 
