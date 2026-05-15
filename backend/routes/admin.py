@@ -27,3 +27,11 @@ def trigger_sync(background_tasks: BackgroundTasks):
     from backend.monitor.sync import run_sync
     background_tasks.add_task(run_sync)
     return {"detail": "Sync started in background"}
+
+
+@router.post("/refresh-channels", dependencies=[Depends(_require_admin)])
+def trigger_channel_refresh(background_tasks: BackgroundTasks):
+    """Drop pending suggestions and regenerate fresh verified ones for all strategies."""
+    from backend.channel_refresh import refresh_suggested_channels
+    background_tasks.add_task(refresh_suggested_channels)
+    return {"detail": "Channel refresh started in background"}

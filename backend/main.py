@@ -7,6 +7,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 from fastapi import FastAPI, Request
 from fastapi.responses import RedirectResponse, Response
 
+from backend.channel_refresh import refresh_suggested_channels
 from backend.data_retention import delete_old_leads
 from backend.database import Base, engine, settings
 from backend.migrate import run_migrations
@@ -22,6 +23,14 @@ _scheduler.add_job(
     delete_old_leads,
     trigger=CronTrigger(hour=3, minute=0),
     id="delete_old_leads",
+    replace_existing=True,
+    max_instances=1,
+    misfire_grace_time=3600,
+)
+_scheduler.add_job(
+    refresh_suggested_channels,
+    trigger=CronTrigger(hour=6, minute=0),  # daily at 6am UTC
+    id="refresh_suggested_channels",
     replace_existing=True,
     max_instances=1,
     misfire_grace_time=3600,
