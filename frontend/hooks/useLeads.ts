@@ -66,7 +66,7 @@ export function useLeads(filters: LeadFilters) {
     setError(null);
     try {
       const data = await api.get<Lead[]>(
-        `/leads${buildQuery(filters)}`,
+        `/leads/${buildQuery(filters)}`,
         auth.accessToken()
       );
       if (!ctrl.signal.aborted) setLeads(data);
