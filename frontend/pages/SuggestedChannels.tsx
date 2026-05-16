@@ -405,6 +405,9 @@ export default function SuggestedChannels() {
   const [addForm, setAddForm] = useState({ name: "", url: "", platform_type: "reddit", strategy_id: "" });
   const [addSaving, setAddSaving] = useState(false);
 
+  // Refresh state
+  const [refreshing, setRefreshing] = useState(false);
+
   // Load strategy titles + channel health once
   useEffect(() => {
     api.get<StrategyTitle[]>("/business/titles", auth.accessToken())
@@ -475,6 +478,28 @@ export default function SuggestedChannels() {
     setChannels((prev) => prev.map((c) => (c.id === id ? { ...c, url } : c)));
   }
 
+  async function handleRefresh() {
+    setRefreshing(true);
+    setError(null);
+    try {
+      const qs = strategyFilter ? `?strategy_id=${strategyFilter}` : "";
+      const newChannels = await api.post<SuggestedChannel[]>(
+        `/suggested-channels/refresh${qs}`,
+        {},
+        auth.accessToken()
+      );
+      // Remove old pending ones from view, prepend fresh suggestions
+      setChannels((prev) => [
+        ...newChannels,
+        ...prev.filter((c) => c.status !== "pending"),
+      ]);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Refresh failed");
+    } finally {
+      setRefreshing(false);
+    }
+  }
+
   async function handleAddChannel() {
     if (!addForm.name.trim()) return;
     setAddSaving(true);
@@ -516,6 +541,21 @@ export default function SuggestedChannels() {
               </p>
             </div>
             <div className="flex gap-2">
+              <button
+                onClick={handleRefresh}
+                disabled={refreshing}
+                className="flex items-center gap-1.5 text-sm border border-gray-200 bg-white hover:bg-gray-50 disabled:opacity-60 text-gray-700 px-3 py-2 rounded-md font-medium transition-colors"
+                title="Generate a fresh batch of AI channel suggestions"
+              >
+                <svg
+                  className={`w-3.5 h-3.5 ${refreshing ? "animate-spin" : ""}`}
+                  viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.2}
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round"
+                    d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+                {refreshing ? "Refreshing…" : "Refresh suggestions"}
+              </button>
               <button
                 onClick={() => setShowAddForm((v) => !v)}
                 className="text-sm border border-gray-200 bg-white hover:bg-gray-50 text-gray-700 px-3 py-2 rounded-md font-medium transition-colors"

@@ -1,14 +1,31 @@
+import logging
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from backend.database import get_db
 from backend.dependencies import get_verified_user
-from backend.model import Channel, ChannelStatus, SuggestedChannel, User
+from backend.model import BusinessStrategy, Channel, ChannelStatus, SuggestedChannel, User
 from backend.monitor.channel_resolver import resolve_channel_url
 from backend.schemas import (
     ChannelCreate, ChannelResponse, ChannelUpdate,
-    TrackedChannelCreate, TrackedChannelPatch, TrackedChannelResponse,
+    PrivateChannelAccessPatch, TrackedChannelCreate, TrackedChannelPatch, TrackedChannelResponse,
 )
+
+log = logging.getLogger(__name__)
+
+_PLATFORM_MAP = {
+    "subreddits": "reddit",
+    "telegram_channels": "telegram",
+    "discord_servers": "discord",
+    "linkedin_groups": "linkedin",
+    "job_boards": "job_board",
+    "quora_topics": "quora",
+    "hackernews_topics": "hackernews",
+    "stackoverflow_tags": "stackoverflow",
+    "devto_tags": "devto",
+    "github_repos": "github",
+    "indiehackers_groups": "indiehackers",
+}
 
 # ── Helper ────────────────────────────────────────────────────────────────────
 
@@ -152,6 +169,57 @@ def toggle_tracked_channel(
     return channel
 
 
+@router.post("/{channel_id}/access-token", response_model=TrackedChannelResponse)
+def set_channel_access_token(
+    channel_id: int,
+    body: PrivateChannelAccessPatch,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_verified_user),
+):
+    """
+    Supply a bot token (Telegram) or bot token + channel snowflake ID (Discord)
+    so the scraper can access a private channel or group.
+
+    The token is stored server-side and NEVER returned in API responses.
+    The channel is marked is_private=True.
+    """
+    channel = db.query(Channel).filter(
+        Channel.id == channel_id,
+        Channel.user_id == current_user.id,
+    ).first()
+    if not channel:
+        raise HTTPException(status_code=404, detail="Channel not found")
+
+    channel.access_token = body.access_token
+    channel.is_private = True
+    if body.external_id:
+        channel.external_id = body.external_id
+    db.commit()
+    db.refresh(channel)
+
+    resp = TrackedChannelResponse.model_validate(channel)
+    resp.has_access_token = True
+    return resp
+
+
+@router.delete("/{channel_id}/access-token", status_code=status.HTTP_204_NO_CONTENT)
+def revoke_channel_access_token(
+    channel_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_verified_user),
+):
+    """Remove a previously stored access token from a channel."""
+    channel = db.query(Channel).filter(
+        Channel.id == channel_id,
+        Channel.user_id == current_user.id,
+    ).first()
+    if not channel:
+        raise HTTPException(status_code=404, detail="Channel not found")
+    channel.access_token = None
+    channel.is_private = False
+    db.commit()
+
+
 @router.delete("/{channel_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_tracked_channel(
     channel_id: int,
@@ -252,6 +320,94 @@ def delete_suggested_channel(
         raise HTTPException(status_code=404, detail="Suggested channel not found")
     db.delete(channel)
     db.commit()
+
+
+@suggested_router.post("/refresh", response_model=list[ChannelResponse])
+def refresh_suggested_channels(
+    strategy_id: Optional[int] = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_verified_user),
+):
+    """Re-run AI channel suggestions for the user's strategies.
+
+    Marks all current *pending* suggested channels as rejected (so they
+    disappear from the default view), then generates a fresh batch.
+    Channels that are already watching/active/inactive are never touched.
+    Exact name+platform duplicates are skipped so the user always sees new ones.
+    """
+    from backend.business_analyzer import suggest_channels
+
+    strategies_q = db.query(BusinessStrategy).filter(BusinessStrategy.user_id == current_user.id)
+    if strategy_id:
+        strategies_q = strategies_q.filter(BusinessStrategy.id == strategy_id)
+    strategies = strategies_q.all()
+
+    if not strategies:
+        raise HTTPException(status_code=404, detail="No strategies found")
+
+    # Archive current pending suggestions so the user sees a fresh list
+    for s in strategies:
+        db.query(SuggestedChannel).filter(
+            SuggestedChannel.user_id == current_user.id,
+            SuggestedChannel.strategy_id == s.id,
+            SuggestedChannel.status == ChannelStatus.pending,
+        ).update({"status": ChannelStatus.rejected})
+    db.commit()
+
+    new_channels: list[SuggestedChannel] = []
+
+    for s in strategies:
+        analysis = {
+            "main_problem": s.main_problem or "",
+            "ideal_customer": s.ideal_customer or "",
+            "keywords": list(s.keywords or []),
+            "buyer_phrases": list(s.buyer_phrases or []),
+            "business_type": s.business_type or "mixed",
+        }
+        try:
+            channels_data = suggest_channels(analysis)
+        except Exception:
+            log.exception("Channel suggestion refresh failed for strategy %d", s.id)
+            continue
+
+        # Collect all existing name+platform combos to avoid exact repeats
+        existing_keys = {
+            (c.platform_type, c.name.lower())
+            for c in db.query(SuggestedChannel).filter(
+                SuggestedChannel.user_id == current_user.id,
+                SuggestedChannel.strategy_id == s.id,
+            ).all()
+        }
+
+        for field, platform_type in _PLATFORM_MAP.items():
+            for entry in channels_data.get(field, []):
+                name = entry.get("name", "") if isinstance(entry, dict) else str(entry)
+                url = entry.get("url") or None if isinstance(entry, dict) else None
+                if not name:
+                    continue
+                if (platform_type, name.lower()) in existing_keys:
+                    continue
+                if not url:
+                    try:
+                        url = resolve_channel_url(platform_type, name)
+                    except Exception:
+                        pass
+                channel = SuggestedChannel(
+                    user_id=current_user.id,
+                    strategy_id=s.id,
+                    platform_type=platform_type,
+                    name=name,
+                    url=url,
+                )
+                db.add(channel)
+                existing_keys.add((platform_type, name.lower()))
+                new_channels.append(channel)
+
+    db.commit()
+    for ch in new_channels:
+        db.refresh(ch)
+
+    return [ChannelResponse.model_validate(ch) for ch in new_channels]
 
 
 @suggested_router.post("/{channel_id}/resolve", response_model=ChannelResponse)
