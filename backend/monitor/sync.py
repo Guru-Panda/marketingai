@@ -544,7 +544,7 @@ def _search_stackoverflow_for_strategy(strategy: BusinessStrategy, db) -> int:
 def _search_github_for_strategy(strategy: BusinessStrategy, db) -> int:
     keywords = list(strategy.keywords or [])
     phrases = list(strategy.buyer_phrases or [])
-    if not keywords:
+    if not keywords and not phrases:
         return 0
 
     biz = {
@@ -558,7 +558,9 @@ def _search_github_for_strategy(strategy: BusinessStrategy, db) -> int:
 
     saved = 0
     seen_ids: set[str] = set()
-    queries = [" ".join(keywords[:3])] + phrases[:2]
+    # Use keywords as primary query, fall back to buyer phrases if no keywords
+    kw_query = " ".join(keywords[:3]) if keywords else ""
+    queries = ([kw_query] if kw_query else []) + phrases[:3]
 
     for query in queries:
         if not query.strip():
@@ -598,7 +600,7 @@ def _search_github_for_strategy(strategy: BusinessStrategy, db) -> int:
 def _search_devto_for_strategy(strategy: BusinessStrategy, db) -> int:
     keywords = list(strategy.keywords or [])
     phrases = list(strategy.buyer_phrases or [])
-    if not keywords:
+    if not keywords and not phrases:
         return 0
 
     biz = {
@@ -613,7 +615,9 @@ def _search_devto_for_strategy(strategy: BusinessStrategy, db) -> int:
     saved = 0
     seen_ids: set[str] = set()
 
-    for post in search_devto_posts(" ".join(keywords[:4]), limit=20):
+    # Search using keywords if available, otherwise fall back to buyer phrases
+    search_query = " ".join(keywords[:4]) if keywords else " ".join(w for p in phrases[:2] for w in p.split()[:3])
+    for post in search_devto_posts(search_query, limit=20):
         ext_id = post["external_id"]
         if ext_id in seen_ids:
             continue
@@ -729,9 +733,9 @@ def run_sync() -> None:
             ("reddit",        _search_reddit_for_strategy,        lambda s: bool(s.buyer_phrases)),
             ("quora",         _search_quora_for_strategy,         lambda s: bool(s.keywords or s.buyer_phrases)),
             ("hackernews",    _search_hackernews_for_strategy,     lambda s: bool(s.keywords or s.buyer_phrases)),
-            ("stackoverflow", _search_stackoverflow_for_strategy,  lambda s: bool(s.keywords)),
-            ("github",        _search_github_for_strategy,         lambda s: bool(s.keywords)),
-            ("devto",         _search_devto_for_strategy,          lambda s: bool(s.keywords)),
+            ("stackoverflow", _search_stackoverflow_for_strategy,  lambda s: bool(s.keywords or s.buyer_phrases)),
+            ("github",        _search_github_for_strategy,         lambda s: bool(s.keywords or s.buyer_phrases)),
+            ("devto",         _search_devto_for_strategy,          lambda s: bool(s.keywords or s.buyer_phrases)),
             ("indiehackers",  _search_indiehackers_for_strategy,   lambda s: bool(s.keywords or s.buyer_phrases)),
         ]
 
