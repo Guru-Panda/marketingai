@@ -206,7 +206,9 @@ def sync_channel(channel: Channel, db) -> tuple[int, int]:
                 buyer_phrases=biz.get("buyer_phrases"),
             )
             intent = float(scored.get("intent_score", 0))
-            if intent < (biz.get("intent_threshold") or settings.INTENT_THRESHOLD):
+            threshold = biz.get("intent_threshold") or settings.INTENT_THRESHOLD
+            log.info("[score] %.2f/%.2f [%s/%s] %s", intent, threshold, channel.platform_type, channel.name, post.get("content", "")[:80])
+            if intent < threshold:
                 continue
 
             # Step 2: Enrich the author — fetch their profile + full activity history.

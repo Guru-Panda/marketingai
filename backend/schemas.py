@@ -105,6 +105,7 @@ class StrategyPatch(BaseModel):
     keywords: list[str] | None = None
     target_locations: list[str] | None = None
     buyer_phrases: list[str] | None = None
+    intent_threshold: float | None = None
 
 
 class StrategyResponse(BaseModel):
