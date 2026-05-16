@@ -11,6 +11,7 @@ interface UserProfile {
   company_name: string | null;
   employee_count: string | null;
   is_verified: boolean;
+  retention_days: number;
   created_at: string;
 }
 
@@ -36,7 +37,7 @@ function formatDate(iso: string) {
 export default function Profile() {
   const navigate = useNavigate();
   const [profile, setProfile] = useState<UserProfile | null>(null);
-  const [form, setForm] = useState({ company_name: "", employee_count: "" });
+  const [form, setForm] = useState({ company_name: "", employee_count: "", retention_days: "90" });
   const [status, setStatus] = useState<{ type: "success" | "error"; message: string } | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -54,6 +55,7 @@ export default function Profile() {
       setForm({
         company_name: data.company_name ?? "",
         employee_count: data.employee_count ?? "",
+        retention_days: String(data.retention_days ?? 90),
       });
     }).catch(() => {
       navigate("/auth/login");
@@ -72,6 +74,7 @@ export default function Profile() {
       const updated = await api.patch<UserProfile>("/users/me", {
         company_name: form.company_name || null,
         employee_count: form.employee_count || null,
+        retention_days: Number(form.retention_days) || 90,
       }, auth.accessToken());
       setProfile(updated);
       setStatus({ type: "success", message: "Profile updated." });
@@ -176,6 +179,23 @@ export default function Profile() {
                     {employeeOptions.map((o) => (
                       <option key={o.value} value={o.value}>{o.label}</option>
                     ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Data retention</label>
+                  <p className="text-xs text-gray-400 mb-2">Leads older than this will be automatically deleted.</p>
+                  <select
+                    value={form.retention_days}
+                    onChange={(e) => setForm((f) => ({ ...f, retention_days: e.target.value }))}
+                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
+                  >
+                    <option value="30">30 days</option>
+                    <option value="60">60 days</option>
+                    <option value="90">90 days</option>
+                    <option value="180">180 days</option>
+                    <option value="365">1 year</option>
+                    <option value="0">Never delete</option>
                   </select>
                 </div>
 

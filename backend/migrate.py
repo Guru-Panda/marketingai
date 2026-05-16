@@ -26,6 +26,8 @@ _MIGRATIONS = [
     ("users",               "notification_threshold", "REAL DEFAULT 0.8",   "DOUBLE PRECISION DEFAULT 0.8"),
     ("users",               "slack_webhook_url","VARCHAR(2048)",             None),
     ("users",               "email_digest",     "BOOLEAN DEFAULT FALSE",     None),
+    ("users",               "retention_days",   "INTEGER DEFAULT 90",        None),
+    ("business_strategies", "exclude_keywords", "JSON DEFAULT '[]'",         "JSONB DEFAULT '[]'"),
 ]
 
 

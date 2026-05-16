@@ -14,6 +14,7 @@ interface Strategy {
   ideal_customer: string;
   keywords: string[];
   buyer_phrases: string[];
+  exclude_keywords: string[];
   target_locations: string[];
   intent_threshold: number | null;
 }
@@ -189,6 +190,7 @@ export default function BusinessForm() {
   const [editStrategy, setEditStrategy] = useState<Strategy | null>(null);
   const [editKeywords, setEditKeywords] = useState<string[]>([]);
   const [editBuyer, setEditBuyer] = useState<string[]>([]);
+  const [editExclude, setEditExclude] = useState<string[]>([]);
   const [editThreshold, setEditThreshold] = useState(0.7);
   const [editSaving, setEditSaving] = useState(false);
   const [editStatus, setEditStatus] = useState<{ type: "success" | "error"; message: string } | null>(null);
@@ -199,6 +201,7 @@ export default function BusinessForm() {
     setEditStrategy(s);
     setEditKeywords(s.keywords ?? []);
     setEditBuyer(s.buyer_phrases ?? []);
+    setEditExclude(s.exclude_keywords ?? []);
     setEditThreshold(s.intent_threshold ?? 0.7);
   }, []);
 
@@ -219,7 +222,7 @@ export default function BusinessForm() {
     try {
       const updated = await api.patch<Strategy>(
         `/business/${editStrategy.id}`,
-        { keywords: editKeywords, buyer_phrases: editBuyer, intent_threshold: editThreshold },
+        { keywords: editKeywords, buyer_phrases: editBuyer, exclude_keywords: editExclude, intent_threshold: editThreshold },
         auth.accessToken()
       );
       setEditStrategy(updated);
@@ -356,6 +359,21 @@ export default function BusinessForm() {
                       onChange={setEditBuyer}
                       placeholder="Add phrase…"
                       colorClass="bg-amber-50 text-amber-700 border-amber-100"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 uppercase tracking-wide mb-1.5">
+                      Exclude keywords
+                    </label>
+                    <p className="text-xs text-gray-400 mb-2">
+                      Posts containing these words will be skipped — removes noise from irrelevant topics.
+                    </p>
+                    <TagInput
+                      tags={editExclude}
+                      onChange={setEditExclude}
+                      placeholder="Add exclusion…"
+                      colorClass="bg-red-50 text-red-600 border-red-100"
                     />
                   </div>
 

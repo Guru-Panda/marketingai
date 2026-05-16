@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from backend.database import get_db
 from backend.dependencies import get_verified_user
-from backend.model import Lead, LeadStatus, User
+from backend.model import Lead, LeadStatus, SuggestedChannel, User
 from backend.monitor.sync import get_sync_stats
 
 router = APIRouter(prefix="/analytics", tags=["analytics"])
@@ -96,3 +96,56 @@ def get_analytics_summary(
         "new_this_week": new_this_week,
         "posts_scanned": sync_stats["posts_scanned"],
     }
+
+
+@router.get("/channel_health")
+def get_channel_health(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_verified_user),
+):
+    """Returns last-lead date and lead count per watched suggested channel."""
+    # Build a map of (platform_type, strategy_id) → (last_lead_at, lead_count)
+    rows = (
+        db.query(
+            Lead.source_platform,
+            Lead.strategy_id,
+            func.max(Lead.created_at).label("last_lead_at"),
+            func.count(Lead.id).label("lead_count"),
+        )
+        .filter(Lead.user_id == current_user.id)
+        .group_by(Lead.source_platform, Lead.strategy_id)
+        .all()
+    )
+    lead_map: dict[tuple, dict] = {}
+    for r in rows:
+        lead_map[(r.source_platform, r.strategy_id)] = {
+            "last_lead_at": r.last_lead_at.isoformat() if r.last_lead_at else None,
+            "lead_count": r.lead_count,
+        }
+
+    # Attach to suggested channels with status=watching
+    channels = (
+        db.query(SuggestedChannel)
+        .filter(
+            SuggestedChannel.user_id == current_user.id,
+            SuggestedChannel.status == "watching",
+        )
+        .all()
+    )
+
+    result = []
+    for ch in channels:
+        stats = lead_map.get((ch.platform_type, ch.strategy_id)) or lead_map.get(
+            (ch.platform_type, None), {}
+        )
+        result.append(
+            {
+                "channel_id": ch.id,
+                "name": ch.name,
+                "platform_type": ch.platform_type,
+                "strategy_id": ch.strategy_id,
+                "last_lead_at": stats.get("last_lead_at"),
+                "lead_count": stats.get("lead_count", 0),
+            }
+        )
+    return result

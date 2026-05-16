@@ -63,6 +63,7 @@ export default function Sidebar() {
   const email = localStorage.getItem("user_email") ?? "";
   const initials = email ? email[0].toUpperCase() : "U";
 
+  const [mobileOpen, setMobileOpen] = useState(false);
   const [strategies, setStrategies] = useState<StrategyTitle[]>([]);
   const [activeId, setActiveId] = useState<number | undefined>(getActiveStrategyId);
 
@@ -81,13 +82,22 @@ export default function Sidebar() {
     window.dispatchEvent(new Event("active_strategy_changed"));
   }
 
-  return (
-    <aside className="w-56 bg-white border-r border-gray-200 flex flex-col py-4 shrink-0">
+  const SidebarContent = () => (
+    <>
       <nav className="flex flex-col gap-1 px-3">
+        <button
+          className="md:hidden self-end p-1.5 text-gray-400 hover:text-gray-600 mb-1"
+          onClick={() => setMobileOpen(false)}
+        >
+          <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        </button>
         {links.map(({ to, label, icon }) => (
           <NavLink
             key={to}
             to={to}
+            onClick={() => setMobileOpen(false)}
             className={({ isActive }) =>
               `flex items-center gap-2.5 px-3 py-2 rounded-md text-sm font-medium transition-colors ${
                 isActive
@@ -144,6 +154,7 @@ export default function Sidebar() {
       <div className="px-3 pt-3 border-t border-gray-100 mt-2">
         <Link
           to="/dashboard/profile"
+          onClick={() => setMobileOpen(false)}
           className="flex items-center gap-2.5 px-3 py-2 rounded-md hover:bg-gray-100 transition-colors"
         >
           <div className="w-6 h-6 rounded-full bg-indigo-600 flex items-center justify-center text-white text-xs font-bold shrink-0">
@@ -152,6 +163,41 @@ export default function Sidebar() {
           <span className="text-xs text-gray-500 truncate">{email || "Profile"}</span>
         </Link>
       </div>
-    </aside>
+    </>
+  );
+
+  return (
+    <>
+      {/* Mobile hamburger button */}
+      <button
+        className="md:hidden fixed top-3 left-3 z-50 p-2 bg-white rounded-lg border border-gray-200 shadow-sm"
+        onClick={() => setMobileOpen(true)}
+        aria-label="Open menu"
+      >
+        <svg className="w-5 h-5 text-gray-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h16" />
+        </svg>
+      </button>
+
+      {/* Mobile overlay backdrop */}
+      {mobileOpen && (
+        <div
+          className="fixed inset-0 bg-black/20 z-30 md:hidden"
+          onClick={() => setMobileOpen(false)}
+        />
+      )}
+
+      {/* Sidebar panel */}
+      <aside
+        className={`
+          fixed left-0 top-0 h-full z-40 w-56 bg-white border-r border-gray-200 flex flex-col py-4
+          transition-transform duration-200 ease-in-out
+          ${mobileOpen ? "translate-x-0" : "-translate-x-full"}
+          md:static md:translate-x-0 md:shrink-0
+        `}
+      >
+        <SidebarContent />
+      </aside>
+    </>
   );
 }

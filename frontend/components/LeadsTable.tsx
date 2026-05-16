@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api, auth } from "../api/client";
 import { Lead, LeadFilters, LeadStatus, useLeads } from "../hooks/useLeads";
 
@@ -336,6 +336,62 @@ function buildDedupMap(leads: Lead[]): Map<string, Set<string>> {
 
 // ── Lead detail panel ─────────────────────────────────────────────────────────
 
+// ── Tone selector for outreach ────────────────────────────────────────────────
+
+const TONES = [
+  { value: "casual",       label: "Casual",       emoji: "😊" },
+  { value: "professional", label: "Professional",  emoji: "💼" },
+  { value: "direct",       label: "Direct",        emoji: "🎯" },
+  { value: "empathetic",   label: "Empathetic",    emoji: "🤝" },
+] as const;
+
+type ToneValue = typeof TONES[number]["value"];
+
+// ── Intent score explanation helper ──────────────────────────────────────────
+
+function IntentBreakdown({ score, keywords, buyerPhrases }: {
+  score: number;
+  keywords: string[];
+  buyerPhrases: string[];
+}) {
+  const matched = buyerPhrases.filter((bp) =>
+    keywords.some((kw) => kw.toLowerCase().includes(bp.toLowerCase()) || bp.toLowerCase().includes(kw.toLowerCase()))
+  );
+
+  const scoreLabel =
+    score >= 0.85 ? "Strong buying signal — highly likely to purchase" :
+    score >= 0.70 ? "Moderate intent — worth reaching out to" :
+    score >= 0.50 ? "Weak signal — may be early-stage interest" :
+    "Low intent — general discussion, unlikely to buy";
+
+  const scoreTier =
+    score >= 0.85 ? "text-green-700 bg-green-50 border-green-200" :
+    score >= 0.70 ? "text-yellow-700 bg-yellow-50 border-yellow-200" :
+    "text-gray-600 bg-gray-50 border-gray-200";
+
+  return (
+    <div className={`rounded-lg border px-3 py-2.5 text-xs ${scoreTier} mt-2`}>
+      <p className="font-medium mb-1">{scoreLabel}</p>
+      {matched.length > 0 && (
+        <div className="flex flex-wrap gap-1 mt-1.5">
+          <span className="text-xs opacity-70 mr-1">Matched buyer phrases:</span>
+          {matched.map((bp) => (
+            <span key={bp} className="px-1.5 py-0.5 rounded bg-white/60 border border-current/20 font-medium">{bp}</span>
+          ))}
+        </div>
+      )}
+      {keywords.length > 0 && matched.length === 0 && (
+        <div className="flex flex-wrap gap-1 mt-1.5">
+          <span className="text-xs opacity-70 mr-1">Matched signals:</span>
+          {keywords.slice(0, 4).map((kw) => (
+            <span key={kw} className="px-1.5 py-0.5 rounded bg-white/60 border border-current/20">{kw}</span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function DetailPanel({ lead, onClose, onStatusChange, dedupPlatforms }: {
   lead: Lead;
   onClose: () => void;
@@ -344,16 +400,27 @@ function DetailPanel({ lead, onClose, onStatusChange, dedupPlatforms }: {
 }) {
   const [outreach, setOutreach] = useState<string | null>(lead.outreach_template ?? null);
   const [generatingOutreach, setGeneratingOutreach] = useState(false);
+  const [selectedTone, setSelectedTone] = useState<ToneValue>("professional");
+  const [strategyBuyerPhrases, setStrategyBuyerPhrases] = useState<string[]>([]);
+
+  // Load buyer phrases from the lead's strategy for the score explanation
+  useEffect(() => {
+    if (lead.strategy_id) {
+      api.get<{ buyer_phrases: string[] }>(`/business/${lead.strategy_id}`, auth.accessToken())
+        .then((s) => setStrategyBuyerPhrases(s.buyer_phrases ?? []))
+        .catch(() => {});
+    }
+  }, [lead.strategy_id]);
 
   const hasContact =
     lead.author_name || lead.author_username || lead.author_email ||
     lead.author_phone || lead.author_location || lead.author_url;
 
-  const generateOutreach = async () => {
+  const generateOutreach = useCallback(async () => {
     setGeneratingOutreach(true);
     try {
       const res = await api.post<{ outreach_template: string }>(
-        `/leads/${lead.id}/outreach`, {}, auth.accessToken()
+        `/leads/${lead.id}/outreach`, { tone: selectedTone }, auth.accessToken()
       );
       setOutreach(res.outreach_template);
     } catch {
@@ -361,7 +428,7 @@ function DetailPanel({ lead, onClose, onStatusChange, dedupPlatforms }: {
     } finally {
       setGeneratingOutreach(false);
     }
-  };
+  }, [lead.id, selectedTone]);
 
   return (
     <>
@@ -490,6 +557,13 @@ function DetailPanel({ lead, onClose, onStatusChange, dedupPlatforms }: {
                 <span className="text-sm text-gray-600">Intent score</span>
                 {scoreBar(lead.intent_score)}
               </div>
+              <div className="px-4 py-2">
+                <IntentBreakdown
+                  score={lead.intent_score}
+                  keywords={lead.keywords ?? []}
+                  buyerPhrases={strategyBuyerPhrases}
+                />
+              </div>
               <div className="flex items-center justify-between px-4 py-3">
                 <span className="text-sm text-gray-600">Status</span>
                 <span className={`inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium ring-1 ring-inset ${STATUS_STYLES[lead.status] ?? "bg-gray-100 text-gray-500"}`}>
@@ -537,9 +611,37 @@ function DetailPanel({ lead, onClose, onStatusChange, dedupPlatforms }: {
               <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Outreach template</h3>
               {outreach && <CopyButton text={outreach} label="Copy message" />}
             </div>
+
+            {/* Tone selector */}
+            <div className="flex gap-1.5 mb-3">
+              {TONES.map((t) => (
+                <button
+                  key={t.value}
+                  onClick={() => setSelectedTone(t.value)}
+                  className={`flex items-center gap-1 px-2.5 py-1 text-xs rounded-full border transition-colors ${
+                    selectedTone === t.value
+                      ? "bg-indigo-600 text-white border-indigo-600"
+                      : "bg-white text-gray-500 border-gray-200 hover:border-indigo-300 hover:text-indigo-600"
+                  }`}
+                >
+                  <span>{t.emoji}</span>
+                  <span>{t.label}</span>
+                </button>
+              ))}
+            </div>
+
             {outreach ? (
-              <div className="bg-indigo-50 rounded-xl border border-indigo-100 px-4 py-3">
-                <p className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed">{outreach}</p>
+              <div>
+                <div className="bg-indigo-50 rounded-xl border border-indigo-100 px-4 py-3 mb-2">
+                  <p className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed">{outreach}</p>
+                </div>
+                <button
+                  onClick={generateOutreach}
+                  disabled={generatingOutreach}
+                  className="text-xs text-indigo-600 hover:underline disabled:opacity-50"
+                >
+                  {generatingOutreach ? "Regenerating…" : `↻ Regenerate as ${selectedTone}`}
+                </button>
               </div>
             ) : (
               <div className="bg-gray-50 rounded-xl border border-gray-200 px-4 py-4 flex flex-col items-center gap-3 text-center">
@@ -549,7 +651,7 @@ function DetailPanel({ lead, onClose, onStatusChange, dedupPlatforms }: {
                   disabled={generatingOutreach}
                   className="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-indigo-600 text-white rounded-md hover:bg-indigo-700 disabled:opacity-60 transition-colors"
                 >
-                  {generatingOutreach ? "Generating…" : "✨ Generate outreach"}
+                  {generatingOutreach ? "Generating…" : `✨ Generate ${selectedTone} message`}
                 </button>
               </div>
             )}
@@ -654,7 +756,55 @@ export default function LeadsTable({ onRegisterExport }: LeadsTableProps) {
         <div className="mb-4 px-4 py-3 rounded-lg bg-red-50 border border-red-200 text-sm text-red-600">{error}</div>
       )}
 
-      <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+      {/* Mobile card view */}
+      <div className="md:hidden flex flex-col gap-3">
+        {loading ? (
+          <div className="py-8 text-center text-sm text-gray-400">Loading…</div>
+        ) : visible.length === 0 ? (
+          <div className="py-12 text-center text-sm text-gray-400">
+            {search ? `No leads match "${search}"` : "No leads yet — channels are being monitored."}
+          </div>
+        ) : visible.map((lead) => (
+          <div
+            key={lead.id}
+            onClick={() => setSelected(lead)}
+            className="bg-white border border-gray-200 rounded-xl p-4 cursor-pointer hover:border-indigo-200 active:bg-indigo-50 transition-colors"
+          >
+            <div className="flex items-start justify-between gap-2 mb-2">
+              <div className="flex items-center gap-2">
+                <span>{PLATFORM_ICONS[lead.source_platform] ?? "🌐"}</span>
+                <span className="text-xs text-gray-500 capitalize">{lead.source_platform}</span>
+                {lead.author_username && dedupMap.has(lead.author_username) && (
+                  <span className="text-xs bg-purple-50 text-purple-700 border border-purple-200 rounded px-1.5 py-0.5">🔗 Multi</span>
+                )}
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                {scoreBar(lead.intent_score)}
+                <span className={`text-xs px-2 py-0.5 rounded-md ring-1 ring-inset font-medium ${STATUS_STYLES[lead.status] ?? ""}`}>
+                  {lead.status.replace(/_/g, " ")}
+                </span>
+              </div>
+            </div>
+            <p className="text-sm text-gray-800 font-medium line-clamp-2 mb-1">
+              {lead.content_summary || lead.content.slice(0, 120)}
+            </p>
+            {lead.author_name && (
+              <p className="text-xs text-gray-400">{lead.author_name}{lead.author_location ? ` · ${lead.author_location}` : ""}</p>
+            )}
+            <div className="flex items-center gap-1.5 mt-2 flex-wrap">
+              {lead.author_email && (
+                <span className="text-xs bg-green-50 text-green-700 border border-green-200 rounded px-1.5 py-0.5">✉ Email</span>
+              )}
+              {lead.keywords.slice(0, 3).map((kw) => (
+                <span key={kw} className="text-xs bg-gray-100 text-gray-500 rounded px-1.5 py-0.5">{kw}</span>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Desktop table view */}
+      <div className="hidden md:block bg-white border border-gray-200 rounded-xl overflow-hidden">
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-gray-200 bg-gray-50">
@@ -782,7 +932,7 @@ export default function LeadsTable({ onRegisterExport }: LeadsTableProps) {
             )}
           </tbody>
         </table>
-      </div>
+      </div>{/* end desktop table */}
 
       {!loading && visible.length > 0 && (
         <p className="mt-3 text-xs text-gray-400 text-right">

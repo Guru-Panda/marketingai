@@ -7,8 +7,8 @@ from sqlalchemy.orm import Session
 
 from backend.database import get_db
 from backend.dependencies import get_verified_user
-from backend.model import Lead, LeadStatus, User
-from backend.schemas import LeadCreate, LeadResponse, LeadStatusPatch
+from backend.model import BusinessStrategy, Lead, LeadStatus, User
+from backend.schemas import LeadCreate, LeadFeedbackPatch, LeadResponse, LeadStatusPatch, OutreachRequest
 
 router = APIRouter(prefix="/leads", tags=["leads"])
 
@@ -149,6 +149,77 @@ def update_lead_status(
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
     lead.status = body.status
+    db.commit()
+    db.refresh(lead)
+    return lead
+
+
+@router.patch("/{lead_id}/feedback", response_model=LeadResponse)
+def submit_lead_feedback(
+    lead_id: int,
+    body: LeadFeedbackPatch,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_verified_user),
+):
+    """Thumbs up (1) or thumbs down (-1) on a lead.
+    Feedback is stored and will be used to tune the intent scorer over time.
+    """
+    if body.feedback not in (1, -1):
+        raise HTTPException(status_code=422, detail="feedback must be 1 or -1")
+    lead = db.query(Lead).filter(
+        Lead.id == lead_id,
+        Lead.user_id == current_user.id,
+    ).first()
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead not found")
+    lead.feedback = body.feedback
+    db.commit()
+    db.refresh(lead)
+    return lead
+
+
+@router.post("/{lead_id}/outreach", response_model=LeadResponse)
+def generate_lead_outreach(
+    lead_id: int,
+    body: OutreachRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_verified_user),
+):
+    """(Re-)generate an AI outreach message draft for a lead.
+    Returns the updated lead with outreach_template populated.
+    """
+    from backend.monitor.scorer import generate_outreach
+
+    lead = db.query(Lead).filter(
+        Lead.id == lead_id,
+        Lead.user_id == current_user.id,
+    ).first()
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead not found")
+
+    # Pull business context from the strategy if available
+    biz: dict = {}
+    if lead.strategy_id:
+        s = db.query(BusinessStrategy).filter(BusinessStrategy.id == lead.strategy_id).first()
+        if s:
+            biz = {
+                "main_problem": s.main_problem or "",
+                "ideal_customer": s.ideal_customer or "",
+            }
+
+    try:
+        template = generate_outreach(
+            platform=lead.source_platform,
+            post_content=lead.content,
+            summary=lead.content_summary,
+            business_context=biz,
+            extra_context=body.extra_context or "",
+            tone=body.tone or None,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Outreach generation failed: {exc}")
+
+    lead.outreach_template = template
     db.commit()
     db.refresh(lead)
     return lead

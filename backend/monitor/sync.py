@@ -14,10 +14,28 @@ from backend.monitor.profile_scraper import (
 )
 from backend.monitor.quora_monitor import fetch_posts as fetch_quora_posts
 from backend.monitor.reddit import fetch_posts as fetch_reddit_posts, search_posts as search_reddit_posts
-from backend.monitor.scorer import extract_contacts, score_post
+from backend.monitor.hackernews_monitor import fetch_posts as fetch_hn_posts, search_posts as search_hn_posts
+from backend.monitor.stackoverflow_monitor import fetch_posts as fetch_so_posts, search_posts as search_so_posts
+from backend.monitor.devto_monitor import fetch_posts as fetch_devto_posts, search_posts as search_devto_posts
+from backend.monitor.github_monitor import fetch_posts as fetch_github_posts, search_issues as search_github_issues
+from backend.monitor.indiehackers_monitor import fetch_posts as fetch_ih_posts
+from backend.monitor.scorer import extract_contacts, generate_outreach, score_post
 from backend.monitor.telegram import fetch_channel_posts
 
 log = logging.getLogger(__name__)
+
+# ── Sync stats (in-memory, reset on restart) ─────────────────────────────────
+_sync_stats: dict = {
+    "last_sync_at": None,
+    "posts_scanned": 0,
+    "new_leads": 0,
+    "is_running": False,
+    "runtime_seconds": 0,
+}
+
+
+def get_sync_stats() -> dict:
+    return dict(_sync_stats)
 
 
 def _user_keywords(user_id: int, db) -> list[str]:
@@ -51,6 +69,7 @@ def _strategy_context(strategy_id: int | None, db) -> dict:
         "buyer_phrases": list(s.buyer_phrases or []),
         "keywords": list(s.keywords or []),
         "intent_threshold": s.intent_threshold,
+        "exclude_keywords": [str(k).lower() for k in (s.exclude_keywords or [])],
     }
 
 
@@ -69,9 +88,8 @@ def _location_matches(author_location: str | None, targets: list[str]) -> bool:
 
 
 def _enrich_author(platform: str, post: dict, channel_external_id: str) -> list[str]:
-    """Fetch all available profile and activity texts for the post's author.
-    Called only after a post passes the intent threshold, so the extra
-    network calls are limited to genuine leads.
+    """Fetch profile / activity texts for the post's author.
+    Called only after a post passes the intent threshold.
     """
     username = post.get("author_username") or ""
 
@@ -98,6 +116,25 @@ def _merge_contacts(from_profile: dict, from_post: dict) -> dict:
     }
 
 
+def _try_generate_outreach(
+    platform: str,
+    post: dict,
+    scored: dict,
+    biz: dict,
+) -> str | None:
+    """Best-effort outreach template generation. Never raises."""
+    try:
+        return generate_outreach(
+            platform=platform,
+            post_content=post.get("content", ""),
+            summary=scored.get("summary", ""),
+            business_context=biz,
+        )
+    except Exception:
+        log.debug("Outreach generation skipped for %s", post.get("external_id"))
+        return None
+
+
 def _save_lead(
     db,
     user_id: int,
@@ -107,6 +144,7 @@ def _save_lead(
     scored: dict,
     post: dict,
     strategy_id: int | None = None,
+    biz: dict | None = None,
 ) -> bool:
     exists = db.query(Lead).filter(
         Lead.user_id == user_id,
@@ -117,6 +155,9 @@ def _save_lead(
         return False
 
     contact = scored.get("contact") or {}
+
+    # Generate outreach template inline (quick haiku call, non-blocking)
+    outreach = _try_generate_outreach(platform, post, scored, biz or {})
 
     lead = Lead(
         user_id=user_id,
@@ -134,6 +175,7 @@ def _save_lead(
         author_email=contact.get("email") or None,
         author_phone=contact.get("phone") or None,
         author_location=contact.get("location") or None,
+        outreach_template=outreach,
     )
     db.add(lead)
     db.commit()
@@ -170,6 +212,16 @@ def _fetch_posts(channel: Channel, keywords: list[str] = [], db=None) -> list[di
         return fetch_job_board_posts(channel.name, channel.url, keywords)
     if pt == "quora":
         return fetch_quora_posts(keywords)
+    if pt == "hackernews":
+        return fetch_hn_posts(channel.name)
+    if pt == "stackoverflow":
+        return fetch_so_posts(channel.name)
+    if pt == "devto":
+        return fetch_devto_posts(channel.name)
+    if pt == "github":
+        return fetch_github_posts(channel.name)
+    if pt == "indiehackers":
+        return fetch_ih_posts(keywords)
     log.debug("No scraper for platform %s", pt)
     return []
 
@@ -197,7 +249,6 @@ def sync_channel(channel: Channel, db) -> tuple[int, int]:
 
     for post in posts:
         try:
-            # Step 1: Score the post for intent — pass full business context
             scored = score_post(
                 post["content"],
                 keywords,
@@ -207,24 +258,33 @@ def sync_channel(channel: Channel, db) -> tuple[int, int]:
             )
             intent = float(scored.get("intent_score", 0))
             threshold = biz.get("intent_threshold") or settings.INTENT_THRESHOLD
-            log.info("[score] %.2f/%.2f [%s/%s] %s", intent, threshold, channel.platform_type, channel.name, post.get("content", "")[:80])
+            log.info(
+                "[score] %.2f/%.2f [%s/%s] %s",
+                intent, threshold, channel.platform_type, channel.name,
+                post.get("content", "")[:80],
+            )
             if intent < threshold:
                 continue
 
-            # Step 2: Enrich the author — fetch their profile + full activity history.
-            # This is the source of truth for email/phone/name/location.
-            # Only runs for posts that passed the intent threshold.
+            # Skip if post contains any excluded keyword
+            exclude_kws = biz.get("exclude_keywords", [])
+            if exclude_kws:
+                content_lower = post["content"].lower()
+                if any(kw in content_lower for kw in exclude_kws):
+                    log.debug(
+                        "Skipping post %s — matched exclude keyword", post.get("external_id")
+                    )
+                    continue
+
             profile_texts = _enrich_author(channel.platform_type, post, channel.external_id)
 
             if profile_texts:
                 profile_contacts = extract_contacts(profile_texts)
-                # If enrichment found a real name, prefer it over the platform handle
                 if profile_contacts.get("name"):
                     post = {**post, "author_name": profile_contacts["name"]}
                 merged_contact = _merge_contacts(profile_contacts, scored.get("contact") or {})
                 scored = {**scored, "contact": merged_contact}
 
-            # Step 3: Apply geographic filter using the best location we now have
             author_location = (scored.get("contact") or {}).get("location")
             if not _location_matches(author_location, target_locations):
                 log.debug(
@@ -233,9 +293,12 @@ def sync_channel(channel: Channel, db) -> tuple[int, int]:
                 )
                 continue
 
-            if _save_lead(db, channel.user_id, channel.platform_type,
-                          post["external_id"], post["content"], scored, post,
-                          strategy_id=channel.strategy_id):
+            if _save_lead(
+                db, channel.user_id, channel.platform_type,
+                post["external_id"], post["content"], scored, post,
+                strategy_id=channel.strategy_id,
+                biz=biz,
+            ):
                 saved += 1
 
         except Exception:
@@ -255,10 +318,9 @@ def sync_channel(channel: Channel, db) -> tuple[int, int]:
     return len(posts), saved
 
 
+# ── Per-platform proactive search helpers ─────────────────────────────────────
+
 def _search_reddit_for_strategy(strategy: BusinessStrategy, db) -> int:
-    """Proactively search Reddit-wide using buyer phrases for a strategy.
-    Returns count of leads saved.
-    """
     phrases = list(strategy.buyer_phrases or [])
     if not phrases:
         return 0
@@ -276,7 +338,7 @@ def _search_reddit_for_strategy(strategy: BusinessStrategy, db) -> int:
     saved = 0
     seen_ids: set[str] = set()
 
-    for phrase in phrases[:8]:  # cap at 8 phrases to limit API calls
+    for phrase in phrases[:8]:
         posts = search_reddit_posts(phrase, limit=15)
         for post in posts:
             ext_id = post["external_id"]
@@ -285,8 +347,7 @@ def _search_reddit_for_strategy(strategy: BusinessStrategy, db) -> int:
             seen_ids.add(ext_id)
             try:
                 scored = score_post(
-                    post["content"],
-                    keywords,
+                    post["content"], keywords,
                     main_problem=biz["main_problem"],
                     ideal_customer=biz["ideal_customer"],
                     buyer_phrases=biz["buyer_phrases"],
@@ -309,23 +370,17 @@ def _search_reddit_for_strategy(strategy: BusinessStrategy, db) -> int:
 
                 if _save_lead(db, strategy.user_id, "reddit", ext_id,
                               post["content"], scored, post,
-                              strategy_id=strategy.id):
+                              strategy_id=strategy.id, biz=biz):
                     saved += 1
             except Exception:
                 log.exception("Reddit search scoring failed for post %s", ext_id)
 
     if saved:
-        log.info(
-            "[reddit-search] strategy %d (%s) — %d leads from buyer phrase search",
-            strategy.id, strategy.title or "untitled", saved,
-        )
+        log.info("[reddit-search] strategy %d — %d leads", strategy.id, saved)
     return saved
 
 
 def _search_quora_for_strategy(strategy: BusinessStrategy, db) -> int:
-    """Proactively search Quora via DuckDuckGo using buyer phrases for a strategy.
-    Returns count of leads saved.
-    """
     phrases = list(strategy.buyer_phrases or [])
     keywords = list(strategy.keywords or [])
     if not phrases and not keywords:
@@ -351,8 +406,7 @@ def _search_quora_for_strategy(strategy: BusinessStrategy, db) -> int:
         seen_ids.add(ext_id)
         try:
             scored = score_post(
-                post["content"],
-                keywords,
+                post["content"], keywords,
                 main_problem=biz["main_problem"],
                 ideal_customer=biz["ideal_customer"],
                 buyer_phrases=biz["buyer_phrases"],
@@ -367,30 +421,296 @@ def _search_quora_for_strategy(strategy: BusinessStrategy, db) -> int:
 
             if _save_lead(db, strategy.user_id, "quora", ext_id,
                           post["content"], scored, post,
-                          strategy_id=strategy.id):
+                          strategy_id=strategy.id, biz=biz):
                 saved += 1
         except Exception:
             log.exception("Quora search scoring failed for post %s", ext_id)
 
     if saved:
-        log.info(
-            "[quora-search] strategy %d (%s) — %d leads from buyer phrase search",
-            strategy.id, strategy.title or "untitled", saved,
-        )
+        log.info("[quora-search] strategy %d — %d leads", strategy.id, saved)
     return saved
 
 
+def _search_hackernews_for_strategy(strategy: BusinessStrategy, db) -> int:
+    phrases = list(strategy.buyer_phrases or [])
+    keywords = list(strategy.keywords or [])
+    if not phrases and not keywords:
+        return 0
+
+    biz = {
+        "main_problem": strategy.main_problem or "",
+        "ideal_customer": strategy.ideal_customer or "",
+        "buyer_phrases": phrases,
+        "keywords": keywords,
+        "intent_threshold": strategy.intent_threshold,
+    }
+    target_locations = [str(loc).strip() for loc in (strategy.target_locations or [])]
+
+    saved = 0
+    seen_ids: set[str] = set()
+    # Use top buyer phrases + keywords as queries
+    queries = phrases[:5] + [" ".join(keywords[:4])]
+
+    for query in queries:
+        if not query.strip():
+            continue
+        for post in search_hn_posts(query, limit=15):
+            ext_id = post["external_id"]
+            if ext_id in seen_ids:
+                continue
+            seen_ids.add(ext_id)
+            try:
+                scored = score_post(
+                    post["content"], keywords,
+                    main_problem=biz["main_problem"],
+                    ideal_customer=biz["ideal_customer"],
+                    buyer_phrases=phrases,
+                )
+                intent = float(scored.get("intent_score", 0))
+                if intent < (biz.get("intent_threshold") or settings.INTENT_THRESHOLD):
+                    continue
+
+                author_location = (scored.get("contact") or {}).get("location")
+                if not _location_matches(author_location, target_locations):
+                    continue
+
+                if _save_lead(db, strategy.user_id, "hackernews", ext_id,
+                              post["content"], scored, post,
+                              strategy_id=strategy.id, biz=biz):
+                    saved += 1
+            except Exception:
+                log.exception("HN search scoring failed for post %s", ext_id)
+
+    if saved:
+        log.info("[hn-search] strategy %d — %d leads", strategy.id, saved)
+    return saved
+
+
+def _search_stackoverflow_for_strategy(strategy: BusinessStrategy, db) -> int:
+    keywords = list(strategy.keywords or [])
+    phrases = list(strategy.buyer_phrases or [])
+    if not keywords and not phrases:
+        return 0
+
+    biz = {
+        "main_problem": strategy.main_problem or "",
+        "ideal_customer": strategy.ideal_customer or "",
+        "buyer_phrases": phrases,
+        "keywords": keywords,
+        "intent_threshold": strategy.intent_threshold,
+    }
+    target_locations = [str(loc).strip() for loc in (strategy.target_locations or [])]
+
+    saved = 0
+    seen_ids: set[str] = set()
+    # Search with keyword combos
+    queries = [" ".join(keywords[:3])] + phrases[:3]
+
+    for query in queries:
+        if not query.strip():
+            continue
+        for post in search_so_posts(query, limit=15):
+            ext_id = post["external_id"]
+            if ext_id in seen_ids:
+                continue
+            seen_ids.add(ext_id)
+            try:
+                scored = score_post(
+                    post["content"], keywords,
+                    main_problem=biz["main_problem"],
+                    ideal_customer=biz["ideal_customer"],
+                    buyer_phrases=phrases,
+                )
+                intent = float(scored.get("intent_score", 0))
+                if intent < (biz.get("intent_threshold") or settings.INTENT_THRESHOLD):
+                    continue
+
+                author_location = (scored.get("contact") or {}).get("location")
+                if not _location_matches(author_location, target_locations):
+                    continue
+
+                if _save_lead(db, strategy.user_id, "stackoverflow", ext_id,
+                              post["content"], scored, post,
+                              strategy_id=strategy.id, biz=biz):
+                    saved += 1
+            except Exception:
+                log.exception("SO search scoring failed for post %s", ext_id)
+
+    if saved:
+        log.info("[so-search] strategy %d — %d leads", strategy.id, saved)
+    return saved
+
+
+def _search_github_for_strategy(strategy: BusinessStrategy, db) -> int:
+    keywords = list(strategy.keywords or [])
+    phrases = list(strategy.buyer_phrases or [])
+    if not keywords:
+        return 0
+
+    biz = {
+        "main_problem": strategy.main_problem or "",
+        "ideal_customer": strategy.ideal_customer or "",
+        "buyer_phrases": phrases,
+        "keywords": keywords,
+        "intent_threshold": strategy.intent_threshold,
+    }
+    target_locations = [str(loc).strip() for loc in (strategy.target_locations or [])]
+
+    saved = 0
+    seen_ids: set[str] = set()
+    queries = [" ".join(keywords[:3])] + phrases[:2]
+
+    for query in queries:
+        if not query.strip():
+            continue
+        for post in search_github_issues(query, limit=15):
+            ext_id = post["external_id"]
+            if ext_id in seen_ids:
+                continue
+            seen_ids.add(ext_id)
+            try:
+                scored = score_post(
+                    post["content"], keywords,
+                    main_problem=biz["main_problem"],
+                    ideal_customer=biz["ideal_customer"],
+                    buyer_phrases=phrases,
+                )
+                intent = float(scored.get("intent_score", 0))
+                if intent < (biz.get("intent_threshold") or settings.INTENT_THRESHOLD):
+                    continue
+
+                author_location = (scored.get("contact") or {}).get("location")
+                if not _location_matches(author_location, target_locations):
+                    continue
+
+                if _save_lead(db, strategy.user_id, "github", ext_id,
+                              post["content"], scored, post,
+                              strategy_id=strategy.id, biz=biz):
+                    saved += 1
+            except Exception:
+                log.exception("GitHub search scoring failed for post %s", ext_id)
+
+    if saved:
+        log.info("[github-search] strategy %d — %d leads", strategy.id, saved)
+    return saved
+
+
+def _search_devto_for_strategy(strategy: BusinessStrategy, db) -> int:
+    keywords = list(strategy.keywords or [])
+    phrases = list(strategy.buyer_phrases or [])
+    if not keywords:
+        return 0
+
+    biz = {
+        "main_problem": strategy.main_problem or "",
+        "ideal_customer": strategy.ideal_customer or "",
+        "buyer_phrases": phrases,
+        "keywords": keywords,
+        "intent_threshold": strategy.intent_threshold,
+    }
+    target_locations = [str(loc).strip() for loc in (strategy.target_locations or [])]
+
+    saved = 0
+    seen_ids: set[str] = set()
+
+    for post in search_devto_posts(" ".join(keywords[:4]), limit=20):
+        ext_id = post["external_id"]
+        if ext_id in seen_ids:
+            continue
+        seen_ids.add(ext_id)
+        try:
+            scored = score_post(
+                post["content"], keywords,
+                main_problem=biz["main_problem"],
+                ideal_customer=biz["ideal_customer"],
+                buyer_phrases=phrases,
+            )
+            intent = float(scored.get("intent_score", 0))
+            if intent < (biz.get("intent_threshold") or settings.INTENT_THRESHOLD):
+                continue
+
+            author_location = (scored.get("contact") or {}).get("location")
+            if not _location_matches(author_location, target_locations):
+                continue
+
+            if _save_lead(db, strategy.user_id, "devto", ext_id,
+                          post["content"], scored, post,
+                          strategy_id=strategy.id, biz=biz):
+                saved += 1
+        except Exception:
+            log.exception("Dev.to search scoring failed for post %s", ext_id)
+
+    if saved:
+        log.info("[devto-search] strategy %d — %d leads", strategy.id, saved)
+    return saved
+
+
+def _search_indiehackers_for_strategy(strategy: BusinessStrategy, db) -> int:
+    keywords = list(strategy.keywords or [])
+    phrases = list(strategy.buyer_phrases or [])
+    if not keywords and not phrases:
+        return 0
+
+    biz = {
+        "main_problem": strategy.main_problem or "",
+        "ideal_customer": strategy.ideal_customer or "",
+        "buyer_phrases": phrases,
+        "keywords": keywords,
+        "intent_threshold": strategy.intent_threshold,
+    }
+    target_locations = [str(loc).strip() for loc in (strategy.target_locations or [])]
+
+    posts = fetch_ih_posts(keywords=keywords, buyer_phrases=phrases)
+    saved = 0
+    seen_ids: set[str] = set()
+
+    for post in posts:
+        ext_id = post["external_id"]
+        if ext_id in seen_ids:
+            continue
+        seen_ids.add(ext_id)
+        try:
+            scored = score_post(
+                post["content"], keywords,
+                main_problem=biz["main_problem"],
+                ideal_customer=biz["ideal_customer"],
+                buyer_phrases=phrases,
+            )
+            intent = float(scored.get("intent_score", 0))
+            if intent < (biz.get("intent_threshold") or settings.INTENT_THRESHOLD):
+                continue
+
+            author_location = (scored.get("contact") or {}).get("location")
+            if not _location_matches(author_location, target_locations):
+                continue
+
+            if _save_lead(db, strategy.user_id, "indiehackers", ext_id,
+                          post["content"], scored, post,
+                          strategy_id=strategy.id, biz=biz):
+                saved += 1
+        except Exception:
+            log.exception("IndieHackers search scoring failed for post %s", ext_id)
+
+    if saved:
+        log.info("[ih-search] strategy %d — %d leads", strategy.id, saved)
+    return saved
+
+
+# ── Main scheduled job ────────────────────────────────────────────────────────
+
 def run_sync() -> None:
-    """Scheduled job: sync all active channels + run buyer phrase search across all users."""
+    """Scheduled job: sync all active channels + proactive search across all platforms."""
+    import time as _time
+    _sync_stats["is_running"] = True
+    _sync_stats["last_sync_at"] = datetime.now(timezone.utc).isoformat()
+    t0 = _time.monotonic()
+
     db = SessionLocal()
     try:
         # ── Channel sync ─────────────────────────────────────────────────────
         channels = db.query(Channel).filter(Channel.is_active.is_(True)).all()
         due = [ch for ch in channels if _is_channel_due(ch)]
-        log.info(
-            "Sync check: %d active channel(s), %d due now",
-            len(channels), len(due),
-        )
+        log.info("Sync check: %d active channel(s), %d due now", len(channels), len(due))
 
         total_fetched = total_saved = 0
         for ch in due:
@@ -399,33 +719,39 @@ def run_sync() -> None:
                 total_fetched += fetched
                 total_saved += saved
             except Exception:
-                log.exception(
-                    "Sync failed for channel %d (%s / %s)",
-                    ch.id, ch.platform_type, ch.name,
-                )
+                log.exception("Sync failed for channel %d (%s / %s)", ch.id, ch.platform_type, ch.name)
 
-        # ── Reddit buyer phrase search (all strategies with buyer_phrases) ───
+        # ── Proactive search across all strategies ───────────────────────────
         strategies = db.query(BusinessStrategy).all()
         search_saved = 0
-        for s in strategies:
-            if s.buyer_phrases:
-                try:
-                    search_saved += _search_reddit_for_strategy(s, db)
-                except Exception:
-                    log.exception("Buyer phrase search failed for strategy %d", s.id)
 
-        # ── Quora buyer phrase search ────────────────────────────────────────
-        for s in strategies:
-            if s.keywords or s.buyer_phrases:
+        _search_fns = [
+            ("reddit",        _search_reddit_for_strategy,        lambda s: bool(s.buyer_phrases)),
+            ("quora",         _search_quora_for_strategy,         lambda s: bool(s.keywords or s.buyer_phrases)),
+            ("hackernews",    _search_hackernews_for_strategy,     lambda s: bool(s.keywords or s.buyer_phrases)),
+            ("stackoverflow", _search_stackoverflow_for_strategy,  lambda s: bool(s.keywords)),
+            ("github",        _search_github_for_strategy,         lambda s: bool(s.keywords)),
+            ("devto",         _search_devto_for_strategy,          lambda s: bool(s.keywords)),
+            ("indiehackers",  _search_indiehackers_for_strategy,   lambda s: bool(s.keywords or s.buyer_phrases)),
+        ]
+
+        for platform, fn, should_run in _search_fns:
+            for s in strategies:
+                if not should_run(s):
+                    continue
                 try:
-                    search_saved += _search_quora_for_strategy(s, db)
+                    search_saved += fn(s, db)
                 except Exception:
-                    log.exception("Quora search failed for strategy %d", s.id)
+                    log.exception("[%s] search failed for strategy %d", platform, s.id)
 
         total_saved += search_saved
+        _sync_stats["posts_scanned"] += total_fetched
+        _sync_stats["new_leads"] += total_saved
         log.info(
-            "Sync complete — %d posts fetched, %d leads saved (%d from buyer search)",
+            "Sync complete — %d posts fetched, %d leads saved (%d from proactive search)",
             total_fetched, total_saved, search_saved,
         )
     finally:
         db.close()
+        _sync_stats["is_running"] = False
+        _sync_stats["runtime_seconds"] = round(_time.monotonic() - t0, 1)

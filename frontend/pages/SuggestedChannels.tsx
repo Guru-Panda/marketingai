@@ -16,9 +16,33 @@ interface SuggestedChannel {
   created_at: string;
 }
 
+interface ChannelHealth {
+  channel_id: number;
+  last_lead_at: string | null;
+  lead_count: number;
+}
+
 interface StrategyTitle {
   id: number;
   title: string | null;
+}
+
+// ── Channel health helper ─────────────────────────────────────────────────────
+
+function healthColor(lastLeadAt: string | null): string {
+  if (!lastLeadAt) return "text-gray-400";
+  const days = (Date.now() - new Date(lastLeadAt).getTime()) / 86400000;
+  if (days < 7) return "text-green-600";
+  if (days < 30) return "text-yellow-600";
+  return "text-red-500";
+}
+
+function healthLabel(lastLeadAt: string | null, leadCount: number): string {
+  if (!lastLeadAt) return leadCount === 0 ? "No leads yet" : "Unknown";
+  const days = Math.floor((Date.now() - new Date(lastLeadAt).getTime()) / 86400000);
+  if (days === 0) return "Lead today";
+  if (days === 1) return "Lead yesterday";
+  return `Lead ${days}d ago`;
 }
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -82,11 +106,13 @@ function ExternalIcon() {
 
 function ChannelRow({
   channel,
+  health,
   onStatusChange,
   onSyncIntervalChange,
   onUrlResolved,
 }: {
   channel: SuggestedChannel;
+  health?: ChannelHealth;
   onStatusChange: (id: number, status: SuggestedChannel["status"], discordChannelId?: string) => Promise<void>;
   onSyncIntervalChange: (id: number, hours: number) => Promise<void>;
   onUrlResolved: (id: number, url: string) => void;
@@ -229,23 +255,33 @@ function ChannelRow({
         )}
       </td>
 
-      {/* Status + sync interval */}
+      {/* Status + sync interval + health */}
       <td className="px-4 py-3 whitespace-nowrap">
-        <div className="flex items-center gap-2">
-          <span className={`inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium ring-1 ring-inset ${STATUS_STYLES[channel.status] ?? ""}`}>
-            {channel.status}
-          </span>
-          {isWatching && (
-            <select
-              value={syncInterval}
-              onChange={(e) => handleSyncChange(Number(e.target.value))}
-              className="text-xs border border-gray-200 rounded-md px-1.5 py-0.5 bg-white text-gray-600 focus:outline-none focus:ring-1 focus:ring-indigo-400"
-              title="How often to check this channel"
-            >
-              {SYNC_INTERVAL_OPTIONS.map((o) => (
-                <option key={o.value} value={o.value}>{o.label}</option>
-              ))}
-            </select>
+        <div className="flex flex-col gap-1">
+          <div className="flex items-center gap-2">
+            <span className={`inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium ring-1 ring-inset ${STATUS_STYLES[channel.status] ?? ""}`}>
+              {channel.status}
+            </span>
+            {isWatching && (
+              <select
+                value={syncInterval}
+                onChange={(e) => handleSyncChange(Number(e.target.value))}
+                className="text-xs border border-gray-200 rounded-md px-1.5 py-0.5 bg-white text-gray-600 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+                title="How often to check this channel"
+              >
+                {SYNC_INTERVAL_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>{o.label}</option>
+                ))}
+              </select>
+            )}
+          </div>
+          {isWatching && health && (
+            <span className={`text-xs ${healthColor(health.last_lead_at)}`}>
+              {healthLabel(health.last_lead_at, health.lead_count)}
+              {health.lead_count > 0 && (
+                <span className="text-gray-400 ml-1">· {health.lead_count} total</span>
+              )}
+            </span>
           )}
         </div>
       </td>
@@ -340,20 +376,46 @@ const STATUS_FILTER_OPTIONS = [
   { value: "inactive", label: "Paused" },
 ];
 
+const ALL_PLATFORMS = [
+  { value: "reddit", label: "Reddit" },
+  { value: "telegram", label: "Telegram" },
+  { value: "discord", label: "Discord" },
+  { value: "linkedin", label: "LinkedIn" },
+  { value: "hackernews", label: "Hacker News" },
+  { value: "stackoverflow", label: "Stack Overflow" },
+  { value: "devto", label: "Dev.to" },
+  { value: "github", label: "GitHub" },
+  { value: "indiehackers", label: "Indie Hackers" },
+  { value: "job_board", label: "Job Board" },
+];
+
 export default function SuggestedChannels() {
   const navigate = useNavigate();
   const [channels, setChannels] = useState<SuggestedChannel[]>([]);
   const [strategies, setStrategies] = useState<StrategyTitle[]>([]);
+  const [healthMap, setHealthMap] = useState<Map<number, ChannelHealth>>(new Map());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [platformFilter, setPlatformFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
   const [strategyFilter, setStrategyFilter] = useState("");
 
-  // Load strategy titles once for the filter dropdown
+  // Add-manually form state
+  const [showAddForm, setShowAddForm] = useState(false);
+  const [addForm, setAddForm] = useState({ name: "", url: "", platform_type: "reddit", strategy_id: "" });
+  const [addSaving, setAddSaving] = useState(false);
+
+  // Load strategy titles + channel health once
   useEffect(() => {
     api.get<StrategyTitle[]>("/business/titles", auth.accessToken())
       .then(setStrategies)
+      .catch(() => {});
+    api.get<ChannelHealth[]>("/analytics/channel_health", auth.accessToken())
+      .then((data) => {
+        const m = new Map<number, ChannelHealth>();
+        data.forEach((h) => m.set(h.channel_id, h));
+        setHealthMap(m);
+      })
       .catch(() => {});
   }, []);
 
@@ -413,6 +475,28 @@ export default function SuggestedChannels() {
     setChannels((prev) => prev.map((c) => (c.id === id ? { ...c, url } : c)));
   }
 
+  async function handleAddChannel() {
+    if (!addForm.name.trim()) return;
+    setAddSaving(true);
+    try {
+      const body: Record<string, unknown> = {
+        platform_type: addForm.platform_type,
+        name: addForm.name.trim(),
+        url: addForm.url.trim() || null,
+        status: "watching",
+      };
+      if (addForm.strategy_id) body.strategy_id = Number(addForm.strategy_id);
+      const ch = await api.post<SuggestedChannel>("/suggested-channels/", body, auth.accessToken());
+      setChannels((prev) => [ch, ...prev]);
+      setAddForm({ name: "", url: "", platform_type: "reddit", strategy_id: "" });
+      setShowAddForm(false);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to add channel");
+    } finally {
+      setAddSaving(false);
+    }
+  }
+
   const watchingCount = channels.filter((c) => c.status === "watching").length;
 
   return (
@@ -421,7 +505,7 @@ export default function SuggestedChannels() {
       <div className="flex flex-1 overflow-hidden">
         <Sidebar />
         <main className="flex-1 overflow-y-auto bg-gray-50 p-8">
-          <div className="flex items-center justify-between mb-6">
+          <div className="flex items-center justify-between mb-4">
             <div>
               <h2 className="text-xl font-semibold text-gray-900">Channels</h2>
               <p className="text-sm text-gray-500 mt-0.5">
@@ -431,13 +515,92 @@ export default function SuggestedChannels() {
                 )}
               </p>
             </div>
-            <button
-              onClick={() => navigate("/dashboard/business")}
-              className="text-sm bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-md font-medium transition-colors"
-            >
-              + New strategy
-            </button>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setShowAddForm((v) => !v)}
+                className="text-sm border border-gray-200 bg-white hover:bg-gray-50 text-gray-700 px-3 py-2 rounded-md font-medium transition-colors"
+              >
+                + Add manually
+              </button>
+              <button
+                onClick={() => navigate("/dashboard/business")}
+                className="text-sm bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-md font-medium transition-colors"
+              >
+                + New strategy
+              </button>
+            </div>
           </div>
+
+          {/* Add manually form */}
+          {showAddForm && (
+            <div className="bg-white border border-gray-200 rounded-xl p-5 mb-4">
+              <h3 className="text-sm font-semibold text-gray-700 mb-3">Add a channel manually</h3>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
+                <div>
+                  <label className="text-xs font-medium text-gray-500 block mb-1">Platform</label>
+                  <select
+                    value={addForm.platform_type}
+                    onChange={(e) => setAddForm((f) => ({ ...f, platform_type: e.target.value }))}
+                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
+                  >
+                    {ALL_PLATFORMS.map((p) => (
+                      <option key={p.value} value={p.value}>{p.label}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-gray-500 block mb-1">Channel name / handle</label>
+                  <input
+                    type="text"
+                    value={addForm.name}
+                    onChange={(e) => setAddForm((f) => ({ ...f, name: e.target.value }))}
+                    placeholder="e.g. r/entrepreneur or @channel"
+                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-gray-500 block mb-1">URL <span className="text-gray-400">(optional)</span></label>
+                  <input
+                    type="url"
+                    value={addForm.url}
+                    onChange={(e) => setAddForm((f) => ({ ...f, url: e.target.value }))}
+                    placeholder="https://…"
+                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                </div>
+                {strategies.length > 0 && (
+                  <div>
+                    <label className="text-xs font-medium text-gray-500 block mb-1">Strategy <span className="text-gray-400">(optional)</span></label>
+                    <select
+                      value={addForm.strategy_id}
+                      onChange={(e) => setAddForm((f) => ({ ...f, strategy_id: e.target.value }))}
+                      className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
+                    >
+                      <option value="">No strategy</option>
+                      {strategies.map((s) => (
+                        <option key={s.id} value={String(s.id)}>{s.title ?? `Strategy #${s.id}`}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+              </div>
+              <div className="flex gap-2">
+                <button
+                  onClick={handleAddChannel}
+                  disabled={addSaving || !addForm.name.trim()}
+                  className="bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white text-sm font-medium px-4 py-2 rounded-md transition-colors"
+                >
+                  {addSaving ? "Adding…" : "Add & Watch"}
+                </button>
+                <button
+                  onClick={() => setShowAddForm(false)}
+                  className="text-sm text-gray-500 hover:text-gray-700 px-4 py-2"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
 
           {/* Filters */}
           <div className="flex flex-wrap gap-3 mb-5">
@@ -539,6 +702,7 @@ export default function SuggestedChannels() {
                     <ChannelRow
                       key={ch.id}
                       channel={ch}
+                      health={healthMap.get(ch.id)}
                       onStatusChange={handleStatusChange}
                       onSyncIntervalChange={handleSyncIntervalChange}
                       onUrlResolved={handleUrlResolved}

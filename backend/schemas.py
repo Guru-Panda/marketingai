@@ -76,6 +76,7 @@ class UserProfile(BaseModel):
     company_name: str | None
     employee_count: EmployeeCount | None
     notes: str | None
+    retention_days: int = 90
     created_at: datetime
     has_strategy: bool = False
 
@@ -86,6 +87,7 @@ class UserUpdate(BaseModel):
     company_name: str | None = None
     employee_count: EmployeeCount | None = None
     notes: str | None = None
+    retention_days: int | None = None
 
 
 class NotificationSettings(BaseModel):
@@ -120,6 +122,7 @@ class StrategyPatch(BaseModel):
     target_locations: list[str] | None = None
     buyer_phrases: list[str] | None = None
     intent_threshold: float | None = None
+    exclude_keywords: list[str] | None = None
 
 
 class StrategyResponse(BaseModel):
@@ -131,6 +134,7 @@ class StrategyResponse(BaseModel):
     keywords: list[Any]
     buyer_phrases: list[Any] = []
     target_locations: list[Any]
+    exclude_keywords: list[Any] = []
     intent_threshold: float | None = None
     created_at: datetime
 
@@ -266,6 +270,7 @@ class LeadFeedbackPatch(BaseModel):
 
 class OutreachRequest(BaseModel):
     extra_context: str | None = None  # optional extra info to personalise the draft
+    tone: str | None = None  # casual | professional | direct | empathetic
 
 
 class LeadResponse(BaseModel):

@@ -47,6 +47,7 @@ class User(Base):
     notification_threshold: Mapped[float] = mapped_column(Float, default=0.8)
     slack_webhook_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
     email_digest: Mapped[bool] = mapped_column(Boolean, default=False)
+    retention_days: Mapped[int] = mapped_column(Integer, default=90)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
     strategies: Mapped[list["BusinessStrategy"]] = relationship(back_populates="user", cascade="all, delete-orphan")
@@ -79,6 +80,7 @@ class BusinessStrategy(Base):
     business_type: Mapped[str] = mapped_column(String(20), default="mixed")
     intent_threshold: Mapped[float | None] = mapped_column(Float, nullable=True)
     target_locations: Mapped[list] = mapped_column(JSON, default=list)
+    exclude_keywords: Mapped[list] = mapped_column(JSON, default=list)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
     user: Mapped["User"] = relationship(back_populates="strategies")

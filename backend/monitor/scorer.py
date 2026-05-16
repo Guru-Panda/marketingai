@@ -81,6 +81,76 @@ Return ONLY valid JSON:
     return json.loads(text)
 
 
+_TONE_PROMPTS = {
+    "casual": "casual and friendly — like a helpful peer, not a salesperson",
+    "professional": "professional and polished — respectful, clear, concise",
+    "direct": "direct and to the point — no fluff, lead with the value proposition immediately",
+    "empathetic": "empathetic and human — acknowledge their pain first, offer help second",
+}
+
+_PLATFORM_TONES = {
+    "reddit": "casual and helpful — like a fellow Redditor",
+    "hackernews": "direct and technical — HN readers value substance over sales",
+    "stackoverflow": "helpful and non-salesy — offer genuine value first",
+    "devto": "developer-friendly and genuine",
+    "github": "technical and concise — GitHub users dislike spam",
+    "indiehackers": "founder-to-founder, peer tone",
+    "linkedin": "professional but warm",
+    "telegram": "brief and conversational",
+    "discord": "conversational and community-aware",
+    "quora": "knowledgeable and helpful",
+}
+
+
+def generate_outreach(
+    platform: str,
+    post_content: str,
+    summary: str,
+    business_context: dict,
+    extra_context: str = "",
+    tone: str | None = None,
+) -> str:
+    """Generate a personalised, ready-to-send outreach message for a lead.
+    Returns a plain-text draft. Raises on API error.
+    tone can be: casual | professional | direct | empathetic (overrides platform default)
+    """
+    if tone and tone in _TONE_PROMPTS:
+        tone_str = _TONE_PROMPTS[tone]
+    else:
+        tone_str = _PLATFORM_TONES.get(platform, "professional and helpful")
+
+    prompt = f"""Write a personalised outreach message for a potential customer based on their post.
+
+Platform: {platform}
+Tone guide: {tone_str}
+
+Business context:
+- Problem we solve: {business_context.get("main_problem", "")}
+- Ideal customer: {business_context.get("ideal_customer", "")}
+{f"- Extra context: {extra_context}" if extra_context else ""}
+
+Lead's post (summary): {summary}
+
+Lead's original post:
+{post_content[:800]}
+
+Write a SHORT outreach message (max 120 words) that:
+1. Opens by referencing something SPECIFIC from their post (shows you actually read it)
+2. Briefly mentions how we can help with their exact problem
+3. Ends with a low-pressure call-to-action (e.g. "happy to share more if useful")
+4. Does NOT use generic openers like "I came across your post" or "Hope this helps!"
+5. Sounds human, not templated
+
+Return ONLY the message text, no preamble, no subject line."""
+
+    response = _get_client().messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=300,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    return next(b.text for b in response.content if b.type == "text").strip()
+
+
 def extract_contacts(texts: list[str]) -> dict:
     """Extract email, phone, location, and real name from profile/activity text snippets.
     Returns: {email, phone, location, name}
