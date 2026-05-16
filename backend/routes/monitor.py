@@ -1,7 +1,8 @@
+import threading
 from fastapi import APIRouter, Depends
 from backend.dependencies import get_verified_user
 from backend.model import User
-from backend.monitor.sync import get_sync_stats
+from backend.monitor.sync import get_sync_stats, run_sync
 
 router = APIRouter(prefix="/monitor", tags=["monitor"])
 
@@ -10,3 +11,15 @@ router = APIRouter(prefix="/monitor", tags=["monitor"])
 def get_monitor_status(current_user: User = Depends(get_verified_user)):
     """Return sync heartbeat — last run time, posts scanned, leads found."""
     return get_sync_stats()
+
+
+@router.post("/sync", status_code=202)
+def trigger_sync(current_user: User = Depends(get_verified_user)):
+    """Manually kick off a full sync across all platforms immediately.
+    Returns 202 immediately; poll GET /monitor/status to track progress.
+    """
+    stats = get_sync_stats()
+    if stats.get("is_running"):
+        return {"status": "already_running"}
+    threading.Thread(target=run_sync, daemon=True).start()
+    return {"status": "started"}

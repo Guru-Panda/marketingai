@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import { Link } from "react-router-dom";
 import Navbar from "../components/Navbar";
 import Sidebar from "../components/Sidebar";
@@ -32,20 +32,46 @@ function relativeTime(iso: string): string {
 
 // ── Sync status banner ────────────────────────────────────────────────────────
 
-function SyncBanner() {
+function SyncBanner({ onNewLeads }: { onNewLeads: () => void }) {
   const [status, setStatus] = useState<SyncStatus | null>(null);
+  const [triggering, setTriggering] = useState(false);
+  const wasRunningRef = useRef(false);
 
   const fetchStatus = useCallback(() => {
     api.get<SyncStatus>("/monitor/status", auth.accessToken())
-      .then(setStatus)
+      .then((s) => {
+        setStatus(s);
+        // When sync finishes after we triggered it, reload leads
+        if (wasRunningRef.current && !s.is_running) {
+          wasRunningRef.current = false;
+          onNewLeads();
+        }
+        if (s.is_running) wasRunningRef.current = true;
+      })
       .catch(() => {});
-  }, []);
+  }, [onNewLeads]);
 
   useEffect(() => {
     fetchStatus();
-    const id = setInterval(fetchStatus, 30_000);
+    // Poll faster (3s) while running, slower (30s) when idle
+    const id = setInterval(fetchStatus, status?.is_running ? 3_000 : 30_000);
     return () => clearInterval(id);
-  }, [fetchStatus]);
+  }, [fetchStatus, status?.is_running]);
+
+  async function handleSync() {
+    setTriggering(true);
+    try {
+      await api.post("/monitor/sync", {}, auth.accessToken());
+      wasRunningRef.current = true;
+      fetchStatus();
+    } catch {
+      // already running or error — either way status will reflect it
+    } finally {
+      setTriggering(false);
+    }
+  }
+
+  const isRunning = status?.is_running || triggering;
 
   return (
     <div className="flex items-center justify-between mb-6">
@@ -60,10 +86,10 @@ function SyncBanner() {
         {/* Sync status pill */}
         {status && (
           <div className="flex items-center gap-2 px-3 py-1.5 bg-white border border-gray-200 rounded-full text-xs text-gray-500 shadow-sm">
-            {status.is_running ? (
+            {isRunning ? (
               <>
                 <span className="w-2 h-2 rounded-full bg-yellow-400 animate-pulse" />
-                <span>Scanning…</span>
+                <span>Scanning all platforms…</span>
               </>
             ) : status.last_sync_at ? (
               <>
@@ -78,7 +104,7 @@ function SyncBanner() {
                 {status.new_leads > 0 && (
                   <>
                     <span className="text-gray-300">·</span>
-                    <span className="text-indigo-600 font-medium">{status.new_leads} leads found</span>
+                    <span className="text-indigo-600 font-medium">{status.new_leads} new leads</span>
                   </>
                 )}
               </>
@@ -91,6 +117,22 @@ function SyncBanner() {
           </div>
         )}
 
+        {/* Manual sync trigger */}
+        <button
+          onClick={handleSync}
+          disabled={isRunning}
+          className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-gray-600 bg-white border border-gray-200 rounded-lg hover:border-indigo-300 hover:text-indigo-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shadow-sm"
+          title="Search all platforms for new leads now"
+        >
+          <svg
+            className={`w-4 h-4 ${isRunning ? "animate-spin" : ""}`}
+            fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}
+          >
+            <path strokeLinecap="round" strokeLinejoin="round"
+              d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" />
+          </svg>
+          {isRunning ? "Scanning…" : "Refresh leads"}
+        </button>
       </div>
     </div>
   );
@@ -148,6 +190,8 @@ function OnboardingPrompt() {
 export default function LeadsDashboard() {
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [profileLoading, setProfileLoading] = useState(true);
+  const [leadsKey, setLeadsKey] = useState(0);
+
   useEffect(() => {
     api.get<UserProfile>("/users/me", auth.accessToken())
       .then(setProfile)
@@ -166,8 +210,8 @@ export default function LeadsDashboard() {
             <OnboardingPrompt />
           ) : (
             <>
-              <SyncBanner />
-              <LeadsTable />
+              <SyncBanner onNewLeads={() => setLeadsKey((k) => k + 1)} />
+              <LeadsTable key={leadsKey} />
             </>
           )}
 
