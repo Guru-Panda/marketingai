@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import { Link } from "react-router-dom";
 import Navbar from "../components/Navbar";
 import Sidebar from "../components/Sidebar";
@@ -159,7 +159,7 @@ function OnboardingPrompt() {
 export default function LeadsDashboard() {
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [profileLoading, setProfileLoading] = useState(true);
-  const [exportFn, setExportFn] = useState<(() => void) | null>(null);
+  const exportFnRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     api.get<UserProfile>("/users/me", auth.accessToken())
@@ -169,7 +169,7 @@ export default function LeadsDashboard() {
   }, []);
 
   const handleExport = () => {
-    if (exportFn) exportFn();
+    if (exportFnRef.current) exportFnRef.current();
   };
 
   return (
@@ -184,7 +184,7 @@ export default function LeadsDashboard() {
           ) : (
             <>
               <SyncBanner onExport={handleExport} />
-              <LeadsTable onRegisterExport={(fn) => setExportFn(() => fn)} />
+              <LeadsTable onRegisterExport={(fn) => { exportFnRef.current = fn; }} />
             </>
           )}
 

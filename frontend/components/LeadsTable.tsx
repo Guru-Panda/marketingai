@@ -730,12 +730,14 @@ export default function LeadsTable({ onRegisterExport }: LeadsTableProps) {
     );
   });
 
-  // Register export function with parent
-  const exportRef = useRef<() => void>(() => exportToCSV(visible));
-  exportRef.current = () => exportToCSV(visible);
+  // Keep a ref to the latest visible list so the export callback is always fresh
+  // without needing to re-register on every render.
+  const visibleRef = useRef(visible);
+  visibleRef.current = visible;
   useEffect(() => {
-    if (onRegisterExport) onRegisterExport(() => exportRef.current());
-  }, [onRegisterExport]);
+    if (onRegisterExport) onRegisterExport(() => exportToCSV(visibleRef.current));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // register once on mount — visibleRef.current is always up to date
 
   const handleStatusChange = async (id: number, status: LeadStatus) => {
     await updateStatus(id, status);
