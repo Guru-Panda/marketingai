@@ -320,6 +320,48 @@ def sync_channel(channel: Channel, db) -> tuple[int, int]:
 
 # ── Per-platform proactive search helpers ─────────────────────────────────────
 
+def _effective_threshold(strategy: BusinessStrategy, multiplier: float = 1.0) -> float:
+    """Return the intent threshold to use for a strategy's proactive search.
+
+    Non-Reddit platforms produce informational/technical content that scores
+    lower than Reddit's explicit "I need X" posts.  Apply a multiplier < 1.0
+    to widen the net while keeping Reddit at full strength.
+    Minimum floor of 0.45 so we never capture completely off-topic posts.
+    """
+    base = float(strategy.intent_threshold or settings.INTENT_THRESHOLD)
+    return max(base * multiplier, 0.45)
+
+
+def _hn_queries(keywords: list[str], phrases: list[str]) -> list[str]:
+    """Build HN-optimised queries.  HN uses 'Ask HN:' / 'best X' language,
+    not the buyer-phrase style used on Reddit."""
+    kw = " ".join(keywords[:3])
+    queries = []
+    if kw:
+        queries += [
+            f"best {kw}",
+            f"{kw} recommendation",
+            f"{kw} alternative",
+            kw,
+        ]
+    # Add raw buyer phrases too — sometimes they match
+    queries += [p for p in phrases[:3] if p not in queries]
+    return queries[:6]
+
+
+def _so_queries(keywords: list[str], phrases: list[str]) -> list[str]:
+    """Build Stack Overflow-optimised queries — question-style searches."""
+    kw = " ".join(keywords[:3])
+    queries = []
+    if kw:
+        queries += [
+            f"looking for {kw}",
+            f"recommend {kw}",
+            kw,
+        ]
+    queries += [p for p in phrases[:2] if p not in queries]
+    return queries[:5]
+
 def _search_reddit_for_strategy(strategy: BusinessStrategy, db) -> int:
     phrases = list(strategy.buyer_phrases or [])
     if not phrases:
@@ -396,6 +438,7 @@ def _search_quora_for_strategy(strategy: BusinessStrategy, db) -> int:
     }
 
     posts = fetch_quora_posts(keywords=keywords, buyer_phrases=phrases)
+    threshold = _effective_threshold(strategy, multiplier=0.75)
     saved = 0
     seen_ids: set[str] = set()
 
@@ -412,7 +455,7 @@ def _search_quora_for_strategy(strategy: BusinessStrategy, db) -> int:
                 buyer_phrases=biz["buyer_phrases"],
             )
             intent = float(scored.get("intent_score", 0))
-            if intent < (biz.get("intent_threshold") or settings.INTENT_THRESHOLD):
+            if intent < threshold:
                 continue
 
             author_location = (scored.get("contact") or {}).get("location")
@@ -446,12 +489,11 @@ def _search_hackernews_for_strategy(strategy: BusinessStrategy, db) -> int:
     }
     target_locations = [str(loc).strip() for loc in (strategy.target_locations or [])]
 
+    threshold = _effective_threshold(strategy, multiplier=0.75)
     saved = 0
     seen_ids: set[str] = set()
-    # Use top buyer phrases + keywords as queries
-    queries = phrases[:5] + [" ".join(keywords[:4])]
 
-    for query in queries:
+    for query in _hn_queries(keywords, phrases):
         if not query.strip():
             continue
         for post in search_hn_posts(query, limit=15):
@@ -467,7 +509,7 @@ def _search_hackernews_for_strategy(strategy: BusinessStrategy, db) -> int:
                     buyer_phrases=phrases,
                 )
                 intent = float(scored.get("intent_score", 0))
-                if intent < (biz.get("intent_threshold") or settings.INTENT_THRESHOLD):
+                if intent < threshold:
                     continue
 
                 author_location = (scored.get("contact") or {}).get("location")
@@ -482,7 +524,7 @@ def _search_hackernews_for_strategy(strategy: BusinessStrategy, db) -> int:
                 log.exception("HN search scoring failed for post %s", ext_id)
 
     if saved:
-        log.info("[hn-search] strategy %d — %d leads", strategy.id, saved)
+        log.info("[hn-search] strategy %d — %d leads (threshold %.2f)", strategy.id, saved, threshold)
     return saved
 
 
@@ -501,12 +543,11 @@ def _search_stackoverflow_for_strategy(strategy: BusinessStrategy, db) -> int:
     }
     target_locations = [str(loc).strip() for loc in (strategy.target_locations or [])]
 
+    threshold = _effective_threshold(strategy, multiplier=0.75)
     saved = 0
     seen_ids: set[str] = set()
-    # Search with keyword combos
-    queries = [" ".join(keywords[:3])] + phrases[:3]
 
-    for query in queries:
+    for query in _so_queries(keywords, phrases):
         if not query.strip():
             continue
         for post in search_so_posts(query, limit=15):
@@ -522,7 +563,7 @@ def _search_stackoverflow_for_strategy(strategy: BusinessStrategy, db) -> int:
                     buyer_phrases=phrases,
                 )
                 intent = float(scored.get("intent_score", 0))
-                if intent < (biz.get("intent_threshold") or settings.INTENT_THRESHOLD):
+                if intent < threshold:
                     continue
 
                 author_location = (scored.get("contact") or {}).get("location")
@@ -537,7 +578,7 @@ def _search_stackoverflow_for_strategy(strategy: BusinessStrategy, db) -> int:
                 log.exception("SO search scoring failed for post %s", ext_id)
 
     if saved:
-        log.info("[so-search] strategy %d — %d leads", strategy.id, saved)
+        log.info("[so-search] strategy %d — %d leads (threshold %.2f)", strategy.id, saved, threshold)
     return saved
 
 
@@ -556,6 +597,7 @@ def _search_github_for_strategy(strategy: BusinessStrategy, db) -> int:
     }
     target_locations = [str(loc).strip() for loc in (strategy.target_locations or [])]
 
+    threshold = _effective_threshold(strategy, multiplier=0.75)
     saved = 0
     seen_ids: set[str] = set()
     # Use keywords as primary query, fall back to buyer phrases if no keywords
@@ -630,7 +672,8 @@ def _search_devto_for_strategy(strategy: BusinessStrategy, db) -> int:
                 buyer_phrases=phrases,
             )
             intent = float(scored.get("intent_score", 0))
-            if intent < (biz.get("intent_threshold") or settings.INTENT_THRESHOLD):
+            threshold = _effective_threshold(strategy, multiplier=0.75)
+            if intent < threshold:
                 continue
 
             author_location = (scored.get("contact") or {}).get("location")
@@ -681,7 +724,8 @@ def _search_indiehackers_for_strategy(strategy: BusinessStrategy, db) -> int:
                 buyer_phrases=phrases,
             )
             intent = float(scored.get("intent_score", 0))
-            if intent < (biz.get("intent_threshold") or settings.INTENT_THRESHOLD):
+            threshold = _effective_threshold(strategy, multiplier=0.75)
+            if intent < threshold:
                 continue
 
             author_location = (scored.get("contact") or {}).get("location")
@@ -735,7 +779,8 @@ def _search_telegram_for_strategy(strategy: BusinessStrategy, db) -> int:
                     buyer_phrases=phrases,
                 )
                 intent = float(scored.get("intent_score", 0))
-                if intent < (biz.get("intent_threshold") or settings.INTENT_THRESHOLD):
+                threshold = _effective_threshold(strategy, multiplier=0.75)
+                if intent < threshold:
                     continue
 
                 author_location = (scored.get("contact") or {}).get("location")
@@ -786,7 +831,8 @@ def _search_jobboards_for_strategy(strategy: BusinessStrategy, db) -> int:
                 buyer_phrases=phrases,
             )
             intent = float(scored.get("intent_score", 0))
-            if intent < (biz.get("intent_threshold") or settings.INTENT_THRESHOLD):
+            threshold = _effective_threshold(strategy, multiplier=0.75)
+            if intent < threshold:
                 continue
 
             # Prefer location from job posting if scorer didn't find one
