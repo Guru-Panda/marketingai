@@ -8,6 +8,7 @@ import BusinessForm from "./pages/BusinessForm";
 import LeadsDashboard from "./pages/LeadsDashboard";
 import SuggestedChannels from "./pages/SuggestedChannels";
 import Profile from "./pages/Profile";
+import AnalyticsDashboard from "./pages/AnalyticsDashboard";
 import RequireAuth from "./components/RequireAuth";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
@@ -23,6 +24,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
           <Route path="/dashboard/channels" element={<SuggestedChannels />} />
           <Route path="/dashboard/leads" element={<LeadsDashboard />} />
           <Route path="/dashboard/profile" element={<Profile />} />
+          <Route path="/dashboard/analytics" element={<AnalyticsDashboard />} />
         </Route>
       </Routes>
     </BrowserRouter>

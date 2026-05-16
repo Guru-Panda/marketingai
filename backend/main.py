@@ -13,7 +13,7 @@ from backend.database import Base, engine, settings
 from backend.migrate import run_migrations
 from backend.monitor.sync import run_sync
 from backend.routes import auth, business, channels, leads, users
-from backend.routes import admin
+from backend.routes import admin, analytics, monitor
 
 Base.metadata.create_all(bind=engine)
 run_migrations()
@@ -86,6 +86,8 @@ app.include_router(channels.router)
 app.include_router(channels.suggested_router)
 app.include_router(leads.router)
 app.include_router(admin.router)
+app.include_router(monitor.router)
+app.include_router(analytics.router)
 
 
 @app.get("/", include_in_schema=False)

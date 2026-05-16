@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from backend.database import get_db
 from backend.dependencies import get_current_user
 from backend.model import BusinessStrategy, User
-from backend.schemas import UserProfile, UserUpdate
+from backend.schemas import NotificationSettings, NotificationUpdate, UserProfile, UserUpdate
 
 router = APIRouter(prefix="/users", tags=["users"])
 
@@ -39,3 +39,21 @@ def update_profile(
     db.commit()
     db.refresh(current_user)
     return _with_strategy_flag(current_user, db)
+
+
+@router.get("/me/notifications", response_model=NotificationSettings)
+def get_notifications(current_user: User = Depends(get_current_user)):
+    return current_user
+
+
+@router.patch("/me/notifications", response_model=NotificationSettings)
+def update_notifications(
+    body: NotificationUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    for field, value in body.model_dump(exclude_unset=True).items():
+        setattr(current_user, field, value)
+    db.commit()
+    db.refresh(current_user)
+    return current_user

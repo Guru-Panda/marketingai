@@ -1,4 +1,4 @@
-import { FormEvent, useState } from "react";
+import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api, auth } from "../api/client";
 import Alert from "../components/Alert";
@@ -13,7 +13,14 @@ interface Strategy {
   main_problem: string;
   ideal_customer: string;
   keywords: string[];
+  buyer_phrases: string[];
   target_locations: string[];
+  intent_threshold: number | null;
+}
+
+interface StrategyTitle {
+  id: number;
+  title: string | null;
 }
 
 interface SuggestedChannel {
@@ -27,6 +34,63 @@ interface SuggestedChannel {
 interface AnalyzeResponse {
   strategy: Strategy;
   channels: SuggestedChannel[];
+}
+
+// ── Tag input ─────────────────────────────────────────────────────────────────
+
+function TagInput({
+  tags,
+  onChange,
+  placeholder,
+  colorClass = "bg-indigo-50 text-indigo-700 border-indigo-100",
+}: {
+  tags: string[];
+  onChange: (tags: string[]) => void;
+  placeholder?: string;
+  colorClass?: string;
+}) {
+  const [input, setInput] = useState("");
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  function add() {
+    const val = input.trim();
+    if (val && !tags.includes(val)) onChange([...tags, val]);
+    setInput("");
+  }
+
+  return (
+    <div
+      className="flex flex-wrap gap-1.5 p-2 border border-gray-300 rounded-md min-h-[42px] cursor-text"
+      onClick={() => inputRef.current?.focus()}
+    >
+      {tags.map((t) => (
+        <span key={t} className={`inline-flex items-center gap-1 px-2 py-0.5 text-xs rounded-full border ${colorClass}`}>
+          {t}
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); onChange(tags.filter((x) => x !== t)); }}
+            className="opacity-50 hover:opacity-100 leading-none"
+          >×</button>
+        </span>
+      ))}
+      <input
+        ref={inputRef}
+        value={input}
+        onChange={(e) => setInput(e.target.value)}
+        onKeyDown={(e) => {
+          if ((e.key === "Enter" || e.key === ",") && input.trim()) {
+            e.preventDefault();
+            add();
+          } else if (e.key === "Backspace" && !input && tags.length) {
+            onChange(tags.slice(0, -1));
+          }
+        }}
+        onBlur={add}
+        placeholder={tags.length ? "" : placeholder}
+        className="flex-1 min-w-[80px] text-xs outline-none bg-transparent text-gray-700 placeholder-gray-400"
+      />
+    </div>
+  );
 }
 
 // ── Platform icons ────────────────────────────────────────────────────────────
@@ -120,6 +184,53 @@ export default function BusinessForm() {
   const [result, setResult] = useState<AnalyzeResponse | null>(null);
   const [channels, setChannels] = useState<SuggestedChannel[]>([]);
 
+  // Existing strategy edit state
+  const [existingStrategies, setExistingStrategies] = useState<StrategyTitle[]>([]);
+  const [editStrategy, setEditStrategy] = useState<Strategy | null>(null);
+  const [editKeywords, setEditKeywords] = useState<string[]>([]);
+  const [editBuyer, setEditBuyer] = useState<string[]>([]);
+  const [editThreshold, setEditThreshold] = useState(0.7);
+  const [editSaving, setEditSaving] = useState(false);
+  const [editStatus, setEditStatus] = useState<{ type: "success" | "error"; message: string } | null>(null);
+  const [showNewForm, setShowNewForm] = useState(false);
+
+  const loadStrategy = useCallback(async (id: number) => {
+    const s = await api.get<Strategy>(`/business/${id}`, auth.accessToken());
+    setEditStrategy(s);
+    setEditKeywords(s.keywords ?? []);
+    setEditBuyer(s.buyer_phrases ?? []);
+    setEditThreshold(s.intent_threshold ?? 0.7);
+  }, []);
+
+  useEffect(() => {
+    api.get<StrategyTitle[]>("/business/titles", auth.accessToken())
+      .then((list) => {
+        setExistingStrategies(list);
+        if (list.length > 0) loadStrategy(list[0].id);
+      })
+      .catch(() => {});
+  }, [loadStrategy]);
+
+  async function handleSaveEdit(e: FormEvent) {
+    e.preventDefault();
+    if (!editStrategy) return;
+    setEditSaving(true);
+    setEditStatus(null);
+    try {
+      const updated = await api.patch<Strategy>(
+        `/business/${editStrategy.id}`,
+        { keywords: editKeywords, buyer_phrases: editBuyer, intent_threshold: editThreshold },
+        auth.accessToken()
+      );
+      setEditStrategy(updated);
+      setEditStatus({ type: "success", message: "Strategy updated — next sync will use these settings." });
+    } catch (err) {
+      setEditStatus({ type: "error", message: err instanceof Error ? err.message : "Failed to save" });
+    } finally {
+      setEditSaving(false);
+    }
+  }
+
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     setLoading(true);
@@ -133,6 +244,10 @@ export default function BusinessForm() {
       );
       setResult(data);
       setChannels(data.channels);
+      // Refresh strategy list
+      const list = await api.get<StrategyTitle[]>("/business/titles", auth.accessToken());
+      setExistingStrategies(list);
+      setShowNewForm(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Analysis failed");
     } finally {
@@ -167,12 +282,139 @@ export default function BusinessForm() {
               </p>
             </div>
 
+            {/* Existing strategy selector */}
+            {existingStrategies.length > 1 && (
+              <div className="bg-white border border-gray-200 rounded-xl p-4 mb-0 flex items-center gap-3">
+                <span className="text-sm text-gray-500 shrink-0">Active strategy:</span>
+                <select
+                  value={editStrategy?.id ?? ""}
+                  onChange={(e) => loadStrategy(Number(e.target.value))}
+                  className="flex-1 border border-gray-300 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
+                >
+                  {existingStrategies.map((s) => (
+                    <option key={s.id} value={s.id}>{s.title ?? `Strategy #${s.id}`}</option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            {/* Edit panel for existing strategy */}
+            {editStrategy && !result && !showNewForm && (
+              <div className="bg-white border border-gray-200 rounded-xl p-6">
+                <div className="flex items-center justify-between mb-4">
+                  <div>
+                    <h3 className="text-sm font-semibold text-gray-900">
+                      {editStrategy.title ?? "Strategy"} — Fine-tune signals
+                    </h3>
+                    <p className="text-xs text-gray-400 mt-0.5">
+                      Adjust keywords and buyer phrases to improve lead quality.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowNewForm(true)}
+                    className="text-xs text-indigo-600 hover:underline"
+                  >
+                    + New strategy
+                  </button>
+                </div>
+
+                {editStatus && <div className="mb-4"><Alert type={editStatus.type} message={editStatus.message} /></div>}
+
+                <form onSubmit={handleSaveEdit} className="flex flex-col gap-5">
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <p className="text-xs font-medium text-gray-500 mb-0.5">PROBLEM SOLVED</p>
+                      <p className="text-sm text-gray-700 leading-relaxed">{editStrategy.main_problem}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs font-medium text-gray-500 mb-0.5">IDEAL CUSTOMER</p>
+                      <p className="text-sm text-gray-700 leading-relaxed">{editStrategy.ideal_customer}</p>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 uppercase tracking-wide mb-1.5">
+                      Keywords
+                    </label>
+                    <p className="text-xs text-gray-400 mb-2">Words we scan for. Press Enter or comma to add.</p>
+                    <TagInput
+                      tags={editKeywords}
+                      onChange={setEditKeywords}
+                      placeholder="Add keyword…"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 uppercase tracking-wide mb-1.5">
+                      Buyer phrases
+                    </label>
+                    <p className="text-xs text-gray-400 mb-2">Phrases that strongly signal purchase intent.</p>
+                    <TagInput
+                      tags={editBuyer}
+                      onChange={setEditBuyer}
+                      placeholder="Add phrase…"
+                      colorClass="bg-amber-50 text-amber-700 border-amber-100"
+                    />
+                  </div>
+
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="text-xs font-medium text-gray-500 uppercase tracking-wide">
+                        Intent threshold
+                      </label>
+                      <span className="text-sm font-semibold text-indigo-600">
+                        {Math.round(editThreshold * 100)}%
+                      </span>
+                    </div>
+                    <p className="text-xs text-gray-400 mb-2">
+                      Only save leads with an intent score at or above this level.
+                    </p>
+                    <input
+                      type="range"
+                      min={0}
+                      max={1}
+                      step={0.05}
+                      value={editThreshold}
+                      onChange={(e) => setEditThreshold(parseFloat(e.target.value))}
+                      className="w-full accent-indigo-600"
+                    />
+                    <div className="flex justify-between text-xs text-gray-400 mt-0.5">
+                      <span>0% — all leads</span>
+                      <span>100% — perfect match only</span>
+                    </div>
+                  </div>
+
+                  <button
+                    type="submit"
+                    disabled={editSaving}
+                    className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white font-medium py-2 rounded-md text-sm transition-colors"
+                  >
+                    {editSaving ? "Saving…" : "Save strategy settings"}
+                  </button>
+                </form>
+              </div>
+            )}
+
             {/* Input form — hidden once results arrive */}
-            {!result && (
+            {!result && (showNewForm || !editStrategy) && (
               <form
                 onSubmit={handleSubmit}
                 className="bg-white border border-gray-200 rounded-xl p-6 flex flex-col gap-4"
               >
+                {showNewForm && (
+                  <div className="flex items-center gap-3 -mt-1 mb-1">
+                    <button
+                      type="button"
+                      onClick={() => setShowNewForm(false)}
+                      className="text-xs text-gray-400 hover:text-gray-600"
+                    >
+                      ← Back
+                    </button>
+                    <span className="text-sm font-medium text-gray-700">Create new strategy</span>
+                  </div>
+                )}
                 {error && <Alert type="error" message={error} />}
 
                 <div>
@@ -291,7 +533,7 @@ export default function BusinessForm() {
                   </button>
                 </div>
               </form>
-            )}
+            )}{/* end new-form */}
 
             {/* Results */}
             {result && (
@@ -344,6 +586,18 @@ export default function BusinessForm() {
                         ))}
                       </div>
                     </div>
+                    {result.strategy.buyer_phrases?.length > 0 && (
+                      <div>
+                        <p className="text-xs font-medium text-gray-500 mb-1">BUYER PHRASES</p>
+                        <div className="flex flex-wrap gap-1.5">
+                          {result.strategy.buyer_phrases.map((bp) => (
+                            <span key={bp} className="px-2 py-0.5 bg-amber-50 text-amber-700 text-xs rounded-full border border-amber-100">
+                              {bp}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </div>
 

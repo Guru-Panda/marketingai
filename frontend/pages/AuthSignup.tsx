@@ -76,7 +76,7 @@ export default function AuthSignup() {
         email,
         password: details.password,
       });
-      auth.save(tokens.access_token, tokens.refresh_token);
+      auth.save(tokens.access_token, tokens.refresh_token, email);
       navigate("/dashboard/business");
     } catch (err) {
       setStatus({ type: "error", message: err instanceof Error ? err.message : "Signup failed" });

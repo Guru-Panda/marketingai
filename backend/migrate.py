@@ -18,7 +18,14 @@ _MIGRATIONS = [
     ("business_strategies", "intent_threshold", "REAL",                      "DOUBLE PRECISION"),
     ("suggested_channels",  "strategy_id",      "INTEGER REFERENCES business_strategies(id)", None),
     ("channels",            "strategy_id",      "INTEGER REFERENCES business_strategies(id)", None),
+    ("channels",            "is_private",       "BOOLEAN DEFAULT FALSE",     None),
+    ("channels",            "access_token",     "VARCHAR(512)",              None),
     ("leads",               "strategy_id",      "INTEGER REFERENCES business_strategies(id)", None),
+    ("leads",               "outreach_template","TEXT",                      None),
+    ("leads",               "feedback",         "INTEGER",                   None),
+    ("users",               "notification_threshold", "REAL DEFAULT 0.8",   "DOUBLE PRECISION DEFAULT 0.8"),
+    ("users",               "slack_webhook_url","VARCHAR(2048)",             None),
+    ("users",               "email_digest",     "BOOLEAN DEFAULT FALSE",     None),
 ]
 
 

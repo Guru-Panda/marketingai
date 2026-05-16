@@ -44,6 +44,9 @@ class User(Base):
     company_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     employee_count: Mapped[EmployeeCount | None] = mapped_column(Enum(EmployeeCount), nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    notification_threshold: Mapped[float] = mapped_column(Float, default=0.8)
+    slack_webhook_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    email_digest: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
     strategies: Mapped[list["BusinessStrategy"]] = relationship(back_populates="user", cascade="all, delete-orphan")
@@ -117,6 +120,9 @@ class Channel(Base):
     sync_interval_hours: Mapped[int | None] = mapped_column(Integer, nullable=True)
     error_count: Mapped[int] = mapped_column(Integer, default=0)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    is_private: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Per-channel bot token (e.g. Telegram bot token, Discord bot token for private channels)
+    access_token: Mapped[str | None] = mapped_column(String(512), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
     user: Mapped["User"] = relationship(back_populates="tracked_channels")
@@ -150,6 +156,11 @@ class Lead(Base):
     author_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
     author_phone: Mapped[str | None] = mapped_column(String(100), nullable=True)
     author_location: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+    # AI-generated outreach message draft
+    outreach_template: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # User feedback: 1 = good lead, -1 = bad lead, None = no feedback yet
+    feedback: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     user: Mapped["User"] = relationship(back_populates="leads")
     strategy: Mapped["BusinessStrategy | None"] = relationship(back_populates="leads")

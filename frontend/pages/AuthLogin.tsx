@@ -21,7 +21,7 @@ export default function AuthLogin() {
     setStatus(null);
     try {
       const tokens = await api.post<TokenResponse>("/auth/login", { email, password });
-      auth.save(tokens.access_token, tokens.refresh_token);
+      auth.save(tokens.access_token, tokens.refresh_token, email);
       console.log("Login successful, tokens saved.");
       navigate("/dashboard/leads");
     } catch (err) {

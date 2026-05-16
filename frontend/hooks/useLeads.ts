@@ -22,6 +22,8 @@ export interface Lead {
   author_email: string | null;
   author_phone: string | null;
   author_location: string | null;
+  outreach_template: string | null;
+  feedback: number | null;
 }
 
 export interface LeadFilters {

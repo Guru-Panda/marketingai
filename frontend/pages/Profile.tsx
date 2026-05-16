@@ -14,6 +14,12 @@ interface UserProfile {
   created_at: string;
 }
 
+interface NotificationSettings {
+  notification_threshold: number;
+  slack_webhook_url: string | null;
+  email_digest: boolean;
+}
+
 const employeeOptions = [
   { value: "5-50", label: "5 – 50 employees" },
   { value: "51-500", label: "51 – 500 employees" },
@@ -34,6 +40,14 @@ export default function Profile() {
   const [status, setStatus] = useState<{ type: "success" | "error"; message: string } | null>(null);
   const [saving, setSaving] = useState(false);
 
+  const [notif, setNotif] = useState<NotificationSettings>({
+    notification_threshold: 0.8,
+    slack_webhook_url: null,
+    email_digest: false,
+  });
+  const [notifStatus, setNotifStatus] = useState<{ type: "success" | "error"; message: string } | null>(null);
+  const [savingNotif, setSavingNotif] = useState(false);
+
   useEffect(() => {
     api.get<UserProfile>("/users/me", auth.accessToken()).then((data) => {
       setProfile(data);
@@ -44,6 +58,10 @@ export default function Profile() {
     }).catch(() => {
       navigate("/auth/login");
     });
+
+    api.get<NotificationSettings>("/users/me/notifications", auth.accessToken())
+      .then(setNotif)
+      .catch(() => {});
   }, [navigate]);
 
   async function handleSave(e: FormEvent) {
@@ -61,6 +79,25 @@ export default function Profile() {
       setStatus({ type: "error", message: err instanceof Error ? err.message : "Failed to save" });
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function handleSaveNotifications(e: FormEvent) {
+    e.preventDefault();
+    setSavingNotif(true);
+    setNotifStatus(null);
+    try {
+      const updated = await api.patch<NotificationSettings>("/users/me/notifications", {
+        notification_threshold: notif.notification_threshold,
+        slack_webhook_url: notif.slack_webhook_url || null,
+        email_digest: notif.email_digest,
+      }, auth.accessToken());
+      setNotif(updated);
+      setNotifStatus({ type: "success", message: "Notification settings saved." });
+    } catch (err) {
+      setNotifStatus({ type: "error", message: err instanceof Error ? err.message : "Failed to save" });
+    } finally {
+      setSavingNotif(false);
     }
   }
 
@@ -148,6 +185,82 @@ export default function Profile() {
                   className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white font-medium py-2 rounded-md text-sm transition-colors"
                 >
                   {saving ? "Saving…" : "Save changes"}
+                </button>
+              </form>
+            </div>
+
+            {/* Notification settings */}
+            <div className="bg-white border border-gray-200 rounded-xl p-6 mb-4">
+              <h2 className="text-sm font-semibold text-gray-700 mb-4">Notification settings</h2>
+
+              {notifStatus && <div className="mb-4"><Alert type={notifStatus.type} message={notifStatus.message} /></div>}
+
+              <form onSubmit={handleSaveNotifications} className="flex flex-col gap-5">
+
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-sm font-medium text-gray-700">
+                      Alert threshold
+                    </label>
+                    <span className="text-sm font-semibold text-indigo-600">
+                      {Math.round(notif.notification_threshold * 100)}%
+                    </span>
+                  </div>
+                  <p className="text-xs text-gray-400 mb-2">
+                    Get notified when a lead's intent score is above this threshold.
+                  </p>
+                  <input
+                    type="range"
+                    min={0}
+                    max={1}
+                    step={0.05}
+                    value={notif.notification_threshold}
+                    onChange={(e) => setNotif((n) => ({ ...n, notification_threshold: parseFloat(e.target.value) }))}
+                    className="w-full accent-indigo-600"
+                  />
+                  <div className="flex justify-between text-xs text-gray-400 mt-0.5">
+                    <span>0%</span><span>50%</span><span>100%</span>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Slack webhook URL <span className="text-gray-400 font-normal">(optional)</span>
+                  </label>
+                  <p className="text-xs text-gray-400 mb-2">
+                    Paste a Slack incoming webhook URL to receive lead alerts in your channel.
+                  </p>
+                  <input
+                    type="url"
+                    value={notif.slack_webhook_url ?? ""}
+                    onChange={(e) => setNotif((n) => ({ ...n, slack_webhook_url: e.target.value || null }))}
+                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    placeholder="https://hooks.slack.com/services/…"
+                  />
+                </div>
+
+                <div className="flex items-center gap-3">
+                  <input
+                    id="email-digest"
+                    type="checkbox"
+                    checked={notif.email_digest}
+                    onChange={(e) => setNotif((n) => ({ ...n, email_digest: e.target.checked }))}
+                    className="w-4 h-4 rounded text-indigo-600 accent-indigo-600"
+                  />
+                  <div>
+                    <label htmlFor="email-digest" className="text-sm font-medium text-gray-700 cursor-pointer">
+                      Daily digest email
+                    </label>
+                    <p className="text-xs text-gray-400">Receive a morning summary of new leads.</p>
+                  </div>
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={savingNotif}
+                  className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white font-medium py-2 rounded-md text-sm transition-colors"
+                >
+                  {savingNotif ? "Saving…" : "Save notification settings"}
                 </button>
               </form>
             </div>

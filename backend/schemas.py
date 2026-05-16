@@ -88,6 +88,20 @@ class UserUpdate(BaseModel):
     notes: str | None = None
 
 
+class NotificationSettings(BaseModel):
+    notification_threshold: float = 0.8
+    slack_webhook_url: str | None = None
+    email_digest: bool = False
+
+    model_config = {"from_attributes": True}
+
+
+class NotificationUpdate(BaseModel):
+    notification_threshold: float | None = None
+    slack_webhook_url: str | None = None
+    email_digest: bool | None = None
+
+
 # ── BusinessStrategy ─────────────────────────────────────────────────────────
 
 class StrategyCreate(BaseModel):
@@ -189,6 +203,13 @@ class TrackedChannelPatch(BaseModel):
     external_id: str | None = None
 
 
+class PrivateChannelAccessPatch(BaseModel):
+    """Submit a bot token / API key for a private channel so we can scrape it."""
+    access_token: str
+    # For Discord: the real snowflake channel ID(s) the bot can see (comma-separated)
+    external_id: str | None = None
+
+
 class TrackedChannelResponse(BaseModel):
     id: int
     user_id: int
@@ -201,9 +222,18 @@ class TrackedChannelResponse(BaseModel):
     sync_interval_hours: int | None
     error_count: int
     is_active: bool
+    is_private: bool = False
+    # Never return the raw token to clients — just indicate whether one is set
+    has_access_token: bool = False
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+    @classmethod
+    def from_orm_safe(cls, channel) -> "TrackedChannelResponse":
+        data = {c.name: getattr(channel, c.name) for c in channel.__table__.columns}
+        data["has_access_token"] = bool(data.pop("access_token", None))
+        return cls(**data)
 
 
 # ── Lead ──────────────────────────────────────────────────────────────────────
@@ -230,6 +260,14 @@ class LeadStatusPatch(BaseModel):
     status: LeadStatus
 
 
+class LeadFeedbackPatch(BaseModel):
+    feedback: int  # 1 = good lead, -1 = bad lead
+
+
+class OutreachRequest(BaseModel):
+    extra_context: str | None = None  # optional extra info to personalise the draft
+
+
 class LeadResponse(BaseModel):
     id: int
     user_id: int
@@ -249,5 +287,7 @@ class LeadResponse(BaseModel):
     author_email: str | None = None
     author_phone: str | None = None
     author_location: str | None = None
+    outreach_template: str | None = None
+    feedback: int | None = None
 
     model_config = {"from_attributes": True}
