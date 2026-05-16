@@ -297,6 +297,155 @@ def _generic_rss(url: str, limit: int) -> list[dict]:
     return []
 
 
+# ── Proactive search sources ──────────────────────────────────────────────────
+
+def _remoteok(keywords: list[str], buyer_phrases: list[str], limit: int) -> list[dict]:
+    """Fetch job listings from RemoteOK's free public JSON API.
+
+    Tags the search with the top keywords. No auth required.
+    https://remoteok.com/api
+    """
+    tags = "+".join(k.lower().replace(" ", "-") for k in keywords[:3]) if keywords else ""
+    url = f"https://remoteok.com/api?tags={tags}" if tags else "https://remoteok.com/api"
+    try:
+        resp = httpx.get(
+            url,
+            headers={**_HEADERS, "Accept": "application/json"},
+            timeout=20,
+            follow_redirects=True,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        # First item is a legal notice dict, skip it
+        posts = []
+        for item in data:
+            if not isinstance(item, dict) or not item.get("id"):
+                continue
+            title = (item.get("position") or "").strip()
+            company = (item.get("company") or "").strip()
+            description = BeautifulSoup(item.get("description") or "", "html.parser").get_text(separator=" ").strip()
+            location = (item.get("location") or "Remote").strip()
+            tags_list = item.get("tags") or []
+
+            if not title:
+                continue
+
+            content = title
+            if company:
+                content += f" at {company}"
+            if location:
+                content += f" ({location})"
+            if tags_list:
+                content += f"\nSkills: {', '.join(str(t) for t in tags_list[:8])}"
+            if description:
+                content += f"\n\n{description[:600]}"
+
+            posts.append({
+                "external_id": f"remoteok-{item['id']}",
+                "content": content,
+                "source_url": item.get("url") or f"https://remoteok.com/remote-jobs/{item['id']}",
+                "author_name": company or None,
+                "author_username": None,
+                "author_url": None,
+                "author_location": location or None,
+            })
+            if len(posts) >= limit:
+                break
+
+        log.info("RemoteOK [%s]: %d jobs", tags, len(posts))
+        return posts
+    except Exception:
+        log.debug("RemoteOK failed for tags '%s'", tags)
+        return []
+
+
+def _hn_hiring(keywords: list[str], buyer_phrases: list[str], limit: int) -> list[dict]:
+    """Search the monthly HN 'Who is Hiring?' thread via Algolia.
+
+    Each comment is a job posting from a company. Good signal for B2B tools —
+    companies actively hiring reveal their tech stack, pain points, and budget.
+    """
+    query = " ".join(keywords[:4]) if keywords else " ".join(
+        w for p in buyer_phrases[:2] for w in p.split()[:3]
+    )
+    if not query.strip():
+        return []
+    try:
+        resp = httpx.get(
+            "https://hn.algolia.com/api/v1/search_by_date",
+            params={
+                "query": query,
+                "tags": "comment,author_whoishiring",
+                "hitsPerPage": min(limit, 30),
+            },
+            headers={"User-Agent": "MarketingMonitor/1.0"},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        posts = []
+        seen: set[str] = set()
+        for hit in resp.json().get("hits", []):
+            obj_id = hit.get("objectID") or ""
+            text = (hit.get("comment_text") or "").strip()
+            if not obj_id or not text or len(text) < 40:
+                continue
+            ext_id = f"hn-hiring-{obj_id}"
+            if ext_id in seen:
+                continue
+            seen.add(ext_id)
+            # Strip HTML tags that sometimes appear in HN comments
+            text = re.sub(r"<[^>]+>", " ", text)
+            posts.append({
+                "external_id": ext_id,
+                "content": text[:2000],
+                "source_url": f"https://news.ycombinator.com/item?id={obj_id}",
+                "author_name": None,
+                "author_username": hit.get("author") or None,
+                "author_url": (
+                    f"https://news.ycombinator.com/user?id={hit['author']}"
+                    if hit.get("author") else None
+                ),
+            })
+            if len(posts) >= limit:
+                break
+        log.info("HN Hiring [%s]: %d results", query[:60], len(posts))
+        return posts
+    except Exception:
+        log.debug("HN Hiring search failed for '%s'", query[:60])
+        return []
+
+
+def search_posts(
+    keywords: list[str],
+    buyer_phrases: list[str] | None = None,
+    limit: int = 25,
+) -> list[dict]:
+    """Proactive job board search combining RemoteOK + HN Hiring + Indeed.
+
+    Called by the sync job for each strategy to find companies whose job
+    postings indicate they need the user's product/service.
+    """
+    phrases = list(buyer_phrases or [])
+    seen: set[str] = set()
+    combined: list[dict] = []
+
+    sources = [
+        lambda: _remoteok(keywords, phrases, limit),
+        lambda: _hn_hiring(keywords, phrases, limit),
+        lambda: _indeed_rss(keywords, limit),
+    ]
+
+    for source_fn in sources:
+        for post in source_fn():
+            if post["external_id"] not in seen:
+                seen.add(post["external_id"])
+                combined.append(post)
+        if len(combined) >= limit:
+            break
+
+    return combined[:limit]
+
+
 # ── Board router ──────────────────────────────────────────────────────────────
 
 _BOARD_PATTERNS = {

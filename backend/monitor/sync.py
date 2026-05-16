@@ -5,7 +5,7 @@ from backend.database import SessionLocal, settings
 from backend.email_utils import send_new_lead_alert
 from backend.model import BusinessStrategy, Channel, Lead, User
 from backend.monitor.discord_monitor import fetch_channel_messages
-from backend.monitor.job_board_monitor import fetch_posts as fetch_job_board_posts
+from backend.monitor.job_board_monitor import fetch_posts as fetch_job_board_posts, search_posts as search_job_board_posts
 from backend.monitor.linkedin_monitor import fetch_posts as fetch_linkedin_posts
 from backend.monitor.profile_scraper import (
     fetch_discord_user_history,
@@ -20,7 +20,7 @@ from backend.monitor.devto_monitor import fetch_posts as fetch_devto_posts, sear
 from backend.monitor.github_monitor import fetch_posts as fetch_github_posts, search_issues as search_github_issues
 from backend.monitor.indiehackers_monitor import fetch_posts as fetch_ih_posts
 from backend.monitor.scorer import extract_contacts, generate_outreach, score_post
-from backend.monitor.telegram import fetch_channel_posts
+from backend.monitor.telegram import fetch_channel_posts, search_posts as search_telegram_posts
 
 log = logging.getLogger(__name__)
 
@@ -700,6 +700,112 @@ def _search_indiehackers_for_strategy(strategy: BusinessStrategy, db) -> int:
     return saved
 
 
+def _search_telegram_for_strategy(strategy: BusinessStrategy, db) -> int:
+    phrases = list(strategy.buyer_phrases or [])
+    keywords = list(strategy.keywords or [])
+    if not phrases and not keywords:
+        return 0
+
+    biz = {
+        "main_problem": strategy.main_problem or "",
+        "ideal_customer": strategy.ideal_customer or "",
+        "buyer_phrases": phrases,
+        "keywords": keywords,
+        "intent_threshold": strategy.intent_threshold,
+    }
+    target_locations = [str(loc).strip() for loc in (strategy.target_locations or [])]
+
+    saved = 0
+    seen_ids: set[str] = set()
+    queries = phrases[:4] + ([" ".join(keywords[:3])] if keywords else [])
+
+    for query in queries:
+        if not query.strip():
+            continue
+        for post in search_telegram_posts(query, limit=10):
+            ext_id = post["external_id"]
+            if ext_id in seen_ids:
+                continue
+            seen_ids.add(ext_id)
+            try:
+                scored = score_post(
+                    post["content"], keywords,
+                    main_problem=biz["main_problem"],
+                    ideal_customer=biz["ideal_customer"],
+                    buyer_phrases=phrases,
+                )
+                intent = float(scored.get("intent_score", 0))
+                if intent < (biz.get("intent_threshold") or settings.INTENT_THRESHOLD):
+                    continue
+
+                author_location = (scored.get("contact") or {}).get("location")
+                if not _location_matches(author_location, target_locations):
+                    continue
+
+                if _save_lead(db, strategy.user_id, "telegram", ext_id,
+                              post["content"], scored, post,
+                              strategy_id=strategy.id, biz=biz):
+                    saved += 1
+            except Exception:
+                log.exception("Telegram search scoring failed for post %s", ext_id)
+
+    if saved:
+        log.info("[telegram-search] strategy %d — %d leads", strategy.id, saved)
+    return saved
+
+
+def _search_jobboards_for_strategy(strategy: BusinessStrategy, db) -> int:
+    keywords = list(strategy.keywords or [])
+    phrases = list(strategy.buyer_phrases or [])
+    if not keywords and not phrases:
+        return 0
+
+    biz = {
+        "main_problem": strategy.main_problem or "",
+        "ideal_customer": strategy.ideal_customer or "",
+        "buyer_phrases": phrases,
+        "keywords": keywords,
+        "intent_threshold": strategy.intent_threshold,
+    }
+    target_locations = [str(loc).strip() for loc in (strategy.target_locations or [])]
+
+    posts = search_job_board_posts(keywords=keywords, buyer_phrases=phrases, limit=30)
+    saved = 0
+    seen_ids: set[str] = set()
+
+    for post in posts:
+        ext_id = post["external_id"]
+        if ext_id in seen_ids:
+            continue
+        seen_ids.add(ext_id)
+        try:
+            scored = score_post(
+                post["content"], keywords,
+                main_problem=biz["main_problem"],
+                ideal_customer=biz["ideal_customer"],
+                buyer_phrases=phrases,
+            )
+            intent = float(scored.get("intent_score", 0))
+            if intent < (biz.get("intent_threshold") or settings.INTENT_THRESHOLD):
+                continue
+
+            # Prefer location from job posting if scorer didn't find one
+            author_location = (scored.get("contact") or {}).get("location") or post.get("author_location")
+            if not _location_matches(author_location, target_locations):
+                continue
+
+            if _save_lead(db, strategy.user_id, "job_board", ext_id,
+                          post["content"], scored, post,
+                          strategy_id=strategy.id, biz=biz):
+                saved += 1
+        except Exception:
+            log.exception("Job board search scoring failed for post %s", ext_id)
+
+    if saved:
+        log.info("[jobboard-search] strategy %d — %d leads", strategy.id, saved)
+    return saved
+
+
 # ── Main scheduled job ────────────────────────────────────────────────────────
 
 def run_sync() -> None:
@@ -737,6 +843,8 @@ def run_sync() -> None:
             ("github",        _search_github_for_strategy,         lambda s: bool(s.keywords or s.buyer_phrases)),
             ("devto",         _search_devto_for_strategy,          lambda s: bool(s.keywords or s.buyer_phrases)),
             ("indiehackers",  _search_indiehackers_for_strategy,   lambda s: bool(s.keywords or s.buyer_phrases)),
+            ("telegram",      _search_telegram_for_strategy,       lambda s: bool(s.keywords or s.buyer_phrases)),
+            ("job_board",     _search_jobboards_for_strategy,      lambda s: bool(s.keywords or s.buyer_phrases)),
         ]
 
         for platform, fn, should_run in _search_fns:
