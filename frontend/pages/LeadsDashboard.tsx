@@ -184,7 +184,7 @@ export default function LeadsDashboard() {
           ) : (
             <>
               <SyncBanner onExport={handleExport} />
-              <LeadsTable onRegisterExport={setExportFn} />
+              <LeadsTable onRegisterExport={(fn) => setExportFn(() => fn)} />
             </>
           )}
 
