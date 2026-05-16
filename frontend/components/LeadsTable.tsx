@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { api, auth } from "../api/client";
 import { Lead, LeadFilters, LeadStatus, useLeads } from "../hooks/useLeads";
 
@@ -696,11 +696,7 @@ function DetailPanel({ lead, onClose, onStatusChange, dedupPlatforms }: {
 
 // ── Main table ────────────────────────────────────────────────────────────────
 
-interface LeadsTableProps {
-  onRegisterExport?: (fn: () => void) => void;
-}
-
-export default function LeadsTable({ onRegisterExport }: LeadsTableProps) {
+export default function LeadsTable() {
   const [filters, setFilters] = useState<LeadFilters>({});
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState<Lead | null>(null);
@@ -730,15 +726,6 @@ export default function LeadsTable({ onRegisterExport }: LeadsTableProps) {
     );
   });
 
-  // Keep a ref to the latest visible list so the export callback is always fresh
-  // without needing to re-register on every render.
-  const visibleRef = useRef(visible);
-  visibleRef.current = visible;
-  useEffect(() => {
-    if (onRegisterExport) onRegisterExport(() => exportToCSV(visibleRef.current));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // register once on mount — visibleRef.current is always up to date
-
   const handleStatusChange = async (id: number, status: LeadStatus) => {
     await updateStatus(id, status);
     setSelected((prev) => prev && prev.id === id ? { ...prev, status } : prev);
@@ -746,13 +733,25 @@ export default function LeadsTable({ onRegisterExport }: LeadsTableProps) {
 
   return (
     <div>
-      <FilterBar
-        filters={filters}
-        onChange={setFilters}
-        strategies={strategies}
-        search={search}
-        onSearch={setSearch}
-      />
+      <div className="flex items-center justify-between mb-3">
+        <FilterBar
+          filters={filters}
+          onChange={setFilters}
+          strategies={strategies}
+          search={search}
+          onSearch={setSearch}
+        />
+        <button
+          onClick={() => exportToCSV(visible)}
+          className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 text-sm text-gray-600 bg-white border border-gray-200 rounded-lg hover:border-gray-300 hover:text-gray-900 transition-colors shadow-sm"
+        >
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+            <path strokeLinecap="round" strokeLinejoin="round"
+              d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
+          </svg>
+          Export CSV
+        </button>
+      </div>
 
       {error && (
         <div className="mb-4 px-4 py-3 rounded-lg bg-red-50 border border-red-200 text-sm text-red-600">{error}</div>

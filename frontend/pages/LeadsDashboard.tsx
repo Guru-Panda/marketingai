@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { Link } from "react-router-dom";
 import Navbar from "../components/Navbar";
 import Sidebar from "../components/Sidebar";
@@ -32,7 +32,7 @@ function relativeTime(iso: string): string {
 
 // ── Sync status banner ────────────────────────────────────────────────────────
 
-function SyncBanner({ onExport }: { onExport: () => void }) {
+function SyncBanner() {
   const [status, setStatus] = useState<SyncStatus | null>(null);
 
   const fetchStatus = useCallback(() => {
@@ -91,17 +91,6 @@ function SyncBanner({ onExport }: { onExport: () => void }) {
           </div>
         )}
 
-        {/* Export CSV */}
-        <button
-          onClick={onExport}
-          className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-gray-600 bg-white border border-gray-200 rounded-lg hover:border-gray-300 hover:text-gray-900 transition-colors shadow-sm"
-        >
-          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
-            <path strokeLinecap="round" strokeLinejoin="round"
-              d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
-          </svg>
-          Export CSV
-        </button>
       </div>
     </div>
   );
@@ -159,18 +148,12 @@ function OnboardingPrompt() {
 export default function LeadsDashboard() {
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [profileLoading, setProfileLoading] = useState(true);
-  const exportFnRef = useRef<(() => void) | null>(null);
-
   useEffect(() => {
     api.get<UserProfile>("/users/me", auth.accessToken())
       .then(setProfile)
       .catch(() => setProfile(null))
       .finally(() => setProfileLoading(false));
   }, []);
-
-  const handleExport = () => {
-    if (exportFnRef.current) exportFnRef.current();
-  };
 
   return (
     <div className="flex flex-col h-screen">
@@ -183,8 +166,8 @@ export default function LeadsDashboard() {
             <OnboardingPrompt />
           ) : (
             <>
-              <SyncBanner onExport={handleExport} />
-              <LeadsTable onRegisterExport={(fn) => { exportFnRef.current = fn; }} />
+              <SyncBanner />
+              <LeadsTable />
             </>
           )}
 
