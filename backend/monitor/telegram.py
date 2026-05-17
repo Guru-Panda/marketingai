@@ -15,60 +15,55 @@ _BROWSER_HEADERS = {
     ),
 }
 _MIN_SUBSCRIBERS = 1_000
-_DDG_URL = "https://lite.duckduckgo.com/lite/"
 
 
-def search_posts(query: str, limit: int = 15) -> list[dict]:
-    """Search public Telegram content via DuckDuckGo site:t.me.
+def _keyword_match(text: str, keywords: list[str], phrases: list[str]) -> bool:
+    lower = text.lower()
+    for phrase in phrases:
+        if phrase.lower() in lower:
+            return True
+    for kw in keywords:
+        if re.search(r'\b' + re.escape(kw.lower()) + r'\b', lower):
+            return True
+    return False
 
-    Returns post-like dicts from Telegram channel snippets found in DDG results.
-    No bot token required — surfaces public channel content indexed by search engines.
+
+def search_posts(
+    channel_usernames: list[str],
+    keywords: list[str],
+    buyer_phrases: list[str],
+    limit: int = 30,
+) -> list[dict]:
+    """Fetch recent posts from known public Telegram channels and filter by keywords.
+
+    Replaces the old DuckDuckGo-based approach (blocked on Railway).
+    Scrapes t.me/s/<username> directly — no bot token or API key needed.
+    Only surfaces posts that match at least one keyword or buyer phrase.
     """
-    try:
-        resp = httpx.post(
-            _DDG_URL,
-            data={"q": f"site:t.me {query}"},
-            headers=_BROWSER_HEADERS,
-            timeout=20,
-            follow_redirects=True,
-        )
-        resp.raise_for_status()
-        soup = BeautifulSoup(resp.text, "html.parser")
-        posts = []
-        seen: set[str] = set()
-        for tr in soup.select("tr"):
-            snippet_el = tr.select_one(".result-snippet")
-            link_el = tr.select_one("a.result-link")
-            if not snippet_el:
-                continue
-            text = snippet_el.get_text(separator=" ").strip()
-            href = link_el.get("href", "") if link_el else ""
-            title = link_el.get_text(strip=True) if link_el else ""
-            if not text or len(text) < 30:
-                continue
-            if "t.me" not in href:
-                continue
-            uid = hashlib.md5((href or text).encode()).hexdigest()[:16]
-            ext_id = f"tg-{uid}"
-            if ext_id in seen:
-                continue
-            seen.add(ext_id)
-            content = f"{title}\n\n{text}".strip() if title else text
-            posts.append({
-                "external_id": ext_id,
-                "content": content,
-                "source_url": href or None,
-                "author_name": None,
-                "author_username": None,
-                "author_url": None,
-            })
-            if len(posts) >= limit:
-                break
-        log.info("Telegram DDG search '%s': %d results", query[:60], len(posts))
-        return posts
-    except Exception:
-        log.exception("Telegram DDG search failed for '%s'", query[:60])
+    if not channel_usernames:
+        log.info("Telegram search: no monitored channels to scan")
         return []
+
+    seen: set[str] = set()
+    matched: list[dict] = []
+
+    for username in channel_usernames:
+        if len(matched) >= limit:
+            break
+        posts = fetch_channel_posts(username, limit=40)
+        for post in posts:
+            if post["external_id"] in seen:
+                continue
+            if not _keyword_match(post["content"], keywords, buyer_phrases):
+                continue
+            seen.add(post["external_id"])
+            matched.append(post)
+            if len(matched) >= limit:
+                break
+
+    log.info("Telegram channel scan (%d channels): %d keyword-matched posts",
+             len(channel_usernames), len(matched))
+    return matched
 
 
 def _parse_subscriber_count(soup: BeautifulSoup) -> int | None:

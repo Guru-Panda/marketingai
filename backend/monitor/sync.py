@@ -12,7 +12,6 @@ from backend.monitor.profile_scraper import (
     fetch_reddit_author,
     fetch_telegram_profile,
 )
-from backend.monitor.quora_monitor import fetch_posts as fetch_quora_posts
 from backend.monitor.reddit import fetch_posts as fetch_reddit_posts, search_posts as search_reddit_posts
 from backend.monitor.hackernews_monitor import fetch_posts as fetch_hn_posts, search_posts as search_hn_posts
 from backend.monitor.stackoverflow_monitor import fetch_posts as fetch_so_posts, search_posts as search_so_posts
@@ -20,7 +19,7 @@ from backend.monitor.devto_monitor import fetch_posts as fetch_devto_posts, sear
 from backend.monitor.github_monitor import fetch_posts as fetch_github_posts, search_issues as search_github_issues
 from backend.monitor.indiehackers_monitor import fetch_posts as fetch_ih_posts
 from backend.monitor.scorer import extract_contacts, generate_outreach, score_post
-from backend.monitor.telegram import fetch_channel_posts, search_posts as search_telegram_posts
+from backend.monitor.telegram import fetch_channel_posts, search_posts as search_telegram_channel_posts
 
 log = logging.getLogger(__name__)
 
@@ -423,59 +422,11 @@ def _search_reddit_for_strategy(strategy: BusinessStrategy, db) -> int:
 
 
 def _search_quora_for_strategy(strategy: BusinessStrategy, db) -> int:
-    phrases = list(strategy.buyer_phrases or [])
-    keywords = list(strategy.keywords or [])
-    if not phrases and not keywords:
-        return 0
-
-    target_locations = [str(loc).strip() for loc in (strategy.target_locations or [])]
-    biz = {
-        "main_problem": strategy.main_problem or "",
-        "ideal_customer": strategy.ideal_customer or "",
-        "buyer_phrases": phrases,
-        "keywords": keywords,
-        "intent_threshold": strategy.intent_threshold,
-    }
-
-    posts = fetch_quora_posts(keywords=keywords, buyer_phrases=phrases)
-    threshold = _effective_threshold(strategy, multiplier=0.5)
-    saved = 0
-    seen_ids: set[str] = set()
-    fetched_total = len(posts)
-    filtered_total = 0
-
-    log.info("[quora-search] strategy %d — fetched %d posts (threshold=%.2f)", strategy.id, fetched_total, threshold)
-
-    for post in posts:
-        ext_id = post["external_id"]
-        if ext_id in seen_ids:
-            continue
-        seen_ids.add(ext_id)
-        try:
-            scored = score_post(
-                post["content"], keywords,
-                main_problem=biz["main_problem"],
-                ideal_customer=biz["ideal_customer"],
-                buyer_phrases=biz["buyer_phrases"],
-            )
-            intent = float(scored.get("intent_score", 0))
-            if intent < threshold:
-                filtered_total += 1
-                continue
-
-            author_location = (scored.get("contact") or {}).get("location")
-            if not _location_matches(author_location, target_locations):
-                continue
-
-            if _save_lead(db, strategy.user_id, "quora", ext_id,
-                          post["content"], scored, post,
-                          strategy_id=strategy.id, biz=biz):
-                saved += 1
-        except Exception:
-            log.exception("Quora search scoring failed for post %s", ext_id)
-
-    log.info("[quora-search] strategy %d — fetched=%d filtered=%d leads=%d", strategy.id, fetched_total, filtered_total, saved)
-    return saved
+    # Quora requires authentication to view content and blocks cloud IPs.
+    # No free public API or RSS feed is available.
+    # Skipping to avoid wasting sync time on empty results.
+    log.debug("[quora-search] strategy %d — skipped (no accessible public API)", strategy.id)
+    return 0
 
 
 def _search_hackernews_for_strategy(strategy: BusinessStrategy, db) -> int:
@@ -769,9 +720,33 @@ def _search_indiehackers_for_strategy(strategy: BusinessStrategy, db) -> int:
 
 
 def _search_telegram_for_strategy(strategy: BusinessStrategy, db) -> int:
+    """Scan the user's monitored Telegram channels for keyword-matching posts.
+
+    Replaces the old DuckDuckGo-based approach (blocked on Railway).
+    Fetches recent posts directly from t.me/s/<username> for each active
+    Telegram channel the user has added, then filters by keywords before scoring.
+    """
     phrases = list(strategy.buyer_phrases or [])
     keywords = list(strategy.keywords or [])
     if not phrases and not keywords:
+        return 0
+
+    # Look up active Telegram channels for this user
+    tg_channels = db.query(Channel).filter(
+        Channel.user_id == strategy.user_id,
+        Channel.platform_type == "telegram",
+        Channel.is_active.is_(True),
+    ).all()
+
+    # Extract usernames from channel names (strip @ if present)
+    channel_usernames = []
+    for ch in tg_channels:
+        name = (ch.name or "").lstrip("@").strip()
+        if name:
+            channel_usernames.append(name)
+
+    if not channel_usernames:
+        log.info("[telegram-search] strategy %d — no active Telegram channels to scan", strategy.id)
         return 0
 
     biz = {
@@ -782,48 +757,49 @@ def _search_telegram_for_strategy(strategy: BusinessStrategy, db) -> int:
         "intent_threshold": strategy.intent_threshold,
     }
     target_locations = [str(loc).strip() for loc in (strategy.target_locations or [])]
-
     threshold = _effective_threshold(strategy, multiplier=0.5)
+
+    posts = search_telegram_channel_posts(
+        channel_usernames=channel_usernames,
+        keywords=keywords,
+        buyer_phrases=phrases,
+        limit=50,
+    )
+
     saved = 0
     seen_ids: set[str] = set()
-    fetched_total = 0
     filtered_total = 0
-    queries = phrases[:4] + ([" ".join(keywords[:3])] if keywords else [])
 
-    for query in queries:
-        if not query.strip():
+    for post in posts:
+        ext_id = post["external_id"]
+        if ext_id in seen_ids:
             continue
-        for post in search_telegram_posts(query, limit=10):
-            fetched_total += 1
-            ext_id = post["external_id"]
-            if ext_id in seen_ids:
+        seen_ids.add(ext_id)
+        try:
+            scored = score_post(
+                post["content"], keywords,
+                main_problem=biz["main_problem"],
+                ideal_customer=biz["ideal_customer"],
+                buyer_phrases=phrases,
+            )
+            intent = float(scored.get("intent_score", 0))
+            if intent < threshold:
+                filtered_total += 1
                 continue
-            seen_ids.add(ext_id)
-            try:
-                scored = score_post(
-                    post["content"], keywords,
-                    main_problem=biz["main_problem"],
-                    ideal_customer=biz["ideal_customer"],
-                    buyer_phrases=phrases,
-                )
-                intent = float(scored.get("intent_score", 0))
-                if intent < threshold:
-                    filtered_total += 1
-                    continue
 
-                author_location = (scored.get("contact") or {}).get("location")
-                if not _location_matches(author_location, target_locations):
-                    continue
+            author_location = (scored.get("contact") or {}).get("location")
+            if not _location_matches(author_location, target_locations):
+                continue
 
-                if _save_lead(db, strategy.user_id, "telegram", ext_id,
-                              post["content"], scored, post,
-                              strategy_id=strategy.id, biz=biz):
-                    saved += 1
-            except Exception:
-                log.exception("Telegram search scoring failed for post %s", ext_id)
+            if _save_lead(db, strategy.user_id, "telegram", ext_id,
+                          post["content"], scored, post,
+                          strategy_id=strategy.id, biz=biz):
+                saved += 1
+        except Exception:
+            log.exception("Telegram search scoring failed for post %s", ext_id)
 
-    log.info("[telegram-search] strategy %d — fetched=%d filtered=%d leads=%d threshold=%.2f",
-             strategy.id, fetched_total, filtered_total, saved, threshold)
+    log.info("[telegram-search] strategy %d — channels=%d fetched=%d filtered=%d leads=%d threshold=%.2f",
+             strategy.id, len(channel_usernames), len(posts), filtered_total, saved, threshold)
     return saved
 
 
