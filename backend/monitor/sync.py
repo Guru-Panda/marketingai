@@ -381,7 +381,7 @@ def _search_reddit_for_strategy(strategy: BusinessStrategy, db) -> int:
     seen_ids: set[str] = set()
 
     for phrase in phrases[:8]:
-        posts = search_reddit_posts(phrase, limit=15)
+        posts = search_reddit_posts(phrase, limit=30, time_filter="week", max_age_days=3)
         for post in posts:
             ext_id = post["external_id"]
             if ext_id in seen_ids:
@@ -502,7 +502,7 @@ def _search_hackernews_for_strategy(strategy: BusinessStrategy, db) -> int:
     for query in _hn_queries(keywords, phrases):
         if not query.strip():
             continue
-        for post in search_hn_posts(query, limit=15):
+        for post in search_hn_posts(query, limit=30):
             fetched_total += 1
             ext_id = post["external_id"]
             if ext_id in seen_ids:
@@ -560,7 +560,7 @@ def _search_stackoverflow_for_strategy(strategy: BusinessStrategy, db) -> int:
     for query in _so_queries(keywords, phrases):
         if not query.strip():
             continue
-        for post in search_so_posts(query, limit=15):
+        for post in search_so_posts(query, limit=30):
             fetched_total += 1
             ext_id = post["external_id"]
             if ext_id in seen_ids:
@@ -621,7 +621,7 @@ def _search_github_for_strategy(strategy: BusinessStrategy, db) -> int:
     for query in queries:
         if not query.strip():
             continue
-        for post in search_github_issues(query, limit=15):
+        for post in search_github_issues(query, limit=30):
             fetched_total += 1
             ext_id = post["external_id"]
             if ext_id in seen_ids:
@@ -679,7 +679,7 @@ def _search_devto_for_strategy(strategy: BusinessStrategy, db) -> int:
     # Search using keywords if available, otherwise fall back to buyer phrases
     search_query = " ".join(keywords[:4]) if keywords else " ".join(w for p in phrases[:2] for w in p.split()[:3])
     log.info("[devto-search] strategy %d — query=%r threshold=%.2f", strategy.id, search_query, threshold)
-    for post in search_devto_posts(search_query, limit=20):
+    for post in search_devto_posts(search_query, limit=40):
         fetched_total += 1
         ext_id = post["external_id"]
         if ext_id in seen_ids:
@@ -842,7 +842,7 @@ def _search_jobboards_for_strategy(strategy: BusinessStrategy, db) -> int:
     }
     target_locations = [str(loc).strip() for loc in (strategy.target_locations or [])]
 
-    posts = search_job_board_posts(keywords=keywords, buyer_phrases=phrases, limit=30)
+    posts = search_job_board_posts(keywords=keywords, buyer_phrases=phrases, limit=50)
     threshold = _effective_threshold(strategy, multiplier=0.5)
     saved = 0
     seen_ids: set[str] = set()
