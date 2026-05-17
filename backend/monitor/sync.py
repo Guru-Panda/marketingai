@@ -326,10 +326,10 @@ def _effective_threshold(strategy: BusinessStrategy, multiplier: float = 1.0) ->
     Non-Reddit platforms produce informational/technical content that scores
     lower than Reddit's explicit "I need X" posts.  Apply a multiplier < 1.0
     to widen the net while keeping Reddit at full strength.
-    Minimum floor of 0.45 so we never capture completely off-topic posts.
+    Minimum floor of 0.35 so we never capture completely off-topic posts.
     """
     base = float(strategy.intent_threshold or settings.INTENT_THRESHOLD)
-    return max(base * multiplier, 0.45)
+    return max(base * multiplier, 0.35)
 
 
 def _hn_queries(keywords: list[str], phrases: list[str]) -> list[str]:
@@ -438,9 +438,13 @@ def _search_quora_for_strategy(strategy: BusinessStrategy, db) -> int:
     }
 
     posts = fetch_quora_posts(keywords=keywords, buyer_phrases=phrases)
-    threshold = _effective_threshold(strategy, multiplier=0.75)
+    threshold = _effective_threshold(strategy, multiplier=0.5)
     saved = 0
     seen_ids: set[str] = set()
+    fetched_total = len(posts)
+    filtered_total = 0
+
+    log.info("[quora-search] strategy %d — fetched %d posts (threshold=%.2f)", strategy.id, fetched_total, threshold)
 
     for post in posts:
         ext_id = post["external_id"]
@@ -456,6 +460,7 @@ def _search_quora_for_strategy(strategy: BusinessStrategy, db) -> int:
             )
             intent = float(scored.get("intent_score", 0))
             if intent < threshold:
+                filtered_total += 1
                 continue
 
             author_location = (scored.get("contact") or {}).get("location")
@@ -469,8 +474,7 @@ def _search_quora_for_strategy(strategy: BusinessStrategy, db) -> int:
         except Exception:
             log.exception("Quora search scoring failed for post %s", ext_id)
 
-    if saved:
-        log.info("[quora-search] strategy %d — %d leads", strategy.id, saved)
+    log.info("[quora-search] strategy %d — fetched=%d filtered=%d leads=%d", strategy.id, fetched_total, filtered_total, saved)
     return saved
 
 
@@ -489,14 +493,17 @@ def _search_hackernews_for_strategy(strategy: BusinessStrategy, db) -> int:
     }
     target_locations = [str(loc).strip() for loc in (strategy.target_locations or [])]
 
-    threshold = _effective_threshold(strategy, multiplier=0.75)
+    threshold = _effective_threshold(strategy, multiplier=0.5)
     saved = 0
     seen_ids: set[str] = set()
+    fetched_total = 0
+    filtered_total = 0
 
     for query in _hn_queries(keywords, phrases):
         if not query.strip():
             continue
         for post in search_hn_posts(query, limit=15):
+            fetched_total += 1
             ext_id = post["external_id"]
             if ext_id in seen_ids:
                 continue
@@ -510,6 +517,7 @@ def _search_hackernews_for_strategy(strategy: BusinessStrategy, db) -> int:
                 )
                 intent = float(scored.get("intent_score", 0))
                 if intent < threshold:
+                    filtered_total += 1
                     continue
 
                 author_location = (scored.get("contact") or {}).get("location")
@@ -523,8 +531,8 @@ def _search_hackernews_for_strategy(strategy: BusinessStrategy, db) -> int:
             except Exception:
                 log.exception("HN search scoring failed for post %s", ext_id)
 
-    if saved:
-        log.info("[hn-search] strategy %d — %d leads (threshold %.2f)", strategy.id, saved, threshold)
+    log.info("[hn-search] strategy %d — fetched=%d filtered_by_threshold=%d leads=%d threshold=%.2f",
+             strategy.id, fetched_total, filtered_total, saved, threshold)
     return saved
 
 
@@ -543,14 +551,17 @@ def _search_stackoverflow_for_strategy(strategy: BusinessStrategy, db) -> int:
     }
     target_locations = [str(loc).strip() for loc in (strategy.target_locations or [])]
 
-    threshold = _effective_threshold(strategy, multiplier=0.75)
+    threshold = _effective_threshold(strategy, multiplier=0.5)
     saved = 0
     seen_ids: set[str] = set()
+    fetched_total = 0
+    filtered_total = 0
 
     for query in _so_queries(keywords, phrases):
         if not query.strip():
             continue
         for post in search_so_posts(query, limit=15):
+            fetched_total += 1
             ext_id = post["external_id"]
             if ext_id in seen_ids:
                 continue
@@ -564,6 +575,7 @@ def _search_stackoverflow_for_strategy(strategy: BusinessStrategy, db) -> int:
                 )
                 intent = float(scored.get("intent_score", 0))
                 if intent < threshold:
+                    filtered_total += 1
                     continue
 
                 author_location = (scored.get("contact") or {}).get("location")
@@ -577,8 +589,8 @@ def _search_stackoverflow_for_strategy(strategy: BusinessStrategy, db) -> int:
             except Exception:
                 log.exception("SO search scoring failed for post %s", ext_id)
 
-    if saved:
-        log.info("[so-search] strategy %d — %d leads (threshold %.2f)", strategy.id, saved, threshold)
+    log.info("[so-search] strategy %d — fetched=%d filtered_by_threshold=%d leads=%d threshold=%.2f",
+             strategy.id, fetched_total, filtered_total, saved, threshold)
     return saved
 
 
@@ -597,9 +609,11 @@ def _search_github_for_strategy(strategy: BusinessStrategy, db) -> int:
     }
     target_locations = [str(loc).strip() for loc in (strategy.target_locations or [])]
 
-    threshold = _effective_threshold(strategy, multiplier=0.75)
+    threshold = _effective_threshold(strategy, multiplier=0.5)
     saved = 0
     seen_ids: set[str] = set()
+    fetched_total = 0
+    filtered_total = 0
     # Use keywords as primary query, fall back to buyer phrases if no keywords
     kw_query = " ".join(keywords[:3]) if keywords else ""
     queries = ([kw_query] if kw_query else []) + phrases[:3]
@@ -608,6 +622,7 @@ def _search_github_for_strategy(strategy: BusinessStrategy, db) -> int:
         if not query.strip():
             continue
         for post in search_github_issues(query, limit=15):
+            fetched_total += 1
             ext_id = post["external_id"]
             if ext_id in seen_ids:
                 continue
@@ -620,7 +635,8 @@ def _search_github_for_strategy(strategy: BusinessStrategy, db) -> int:
                     buyer_phrases=phrases,
                 )
                 intent = float(scored.get("intent_score", 0))
-                if intent < (biz.get("intent_threshold") or settings.INTENT_THRESHOLD):
+                if intent < threshold:
+                    filtered_total += 1
                     continue
 
                 author_location = (scored.get("contact") or {}).get("location")
@@ -634,8 +650,8 @@ def _search_github_for_strategy(strategy: BusinessStrategy, db) -> int:
             except Exception:
                 log.exception("GitHub search scoring failed for post %s", ext_id)
 
-    if saved:
-        log.info("[github-search] strategy %d — %d leads", strategy.id, saved)
+    log.info("[github-search] strategy %d — fetched=%d filtered=%d leads=%d threshold=%.2f",
+             strategy.id, fetched_total, filtered_total, saved, threshold)
     return saved
 
 
@@ -654,12 +670,17 @@ def _search_devto_for_strategy(strategy: BusinessStrategy, db) -> int:
     }
     target_locations = [str(loc).strip() for loc in (strategy.target_locations or [])]
 
+    threshold = _effective_threshold(strategy, multiplier=0.5)
     saved = 0
     seen_ids: set[str] = set()
+    fetched_total = 0
+    filtered_total = 0
 
     # Search using keywords if available, otherwise fall back to buyer phrases
     search_query = " ".join(keywords[:4]) if keywords else " ".join(w for p in phrases[:2] for w in p.split()[:3])
+    log.info("[devto-search] strategy %d — query=%r threshold=%.2f", strategy.id, search_query, threshold)
     for post in search_devto_posts(search_query, limit=20):
+        fetched_total += 1
         ext_id = post["external_id"]
         if ext_id in seen_ids:
             continue
@@ -672,8 +693,8 @@ def _search_devto_for_strategy(strategy: BusinessStrategy, db) -> int:
                 buyer_phrases=phrases,
             )
             intent = float(scored.get("intent_score", 0))
-            threshold = _effective_threshold(strategy, multiplier=0.75)
             if intent < threshold:
+                filtered_total += 1
                 continue
 
             author_location = (scored.get("contact") or {}).get("location")
@@ -687,8 +708,7 @@ def _search_devto_for_strategy(strategy: BusinessStrategy, db) -> int:
         except Exception:
             log.exception("Dev.to search scoring failed for post %s", ext_id)
 
-    if saved:
-        log.info("[devto-search] strategy %d — %d leads", strategy.id, saved)
+    log.info("[devto-search] strategy %d — fetched=%d filtered=%d leads=%d", strategy.id, fetched_total, filtered_total, saved)
     return saved
 
 
@@ -708,8 +728,13 @@ def _search_indiehackers_for_strategy(strategy: BusinessStrategy, db) -> int:
     target_locations = [str(loc).strip() for loc in (strategy.target_locations or [])]
 
     posts = fetch_ih_posts(keywords=keywords, buyer_phrases=phrases)
+    threshold = _effective_threshold(strategy, multiplier=0.5)
     saved = 0
     seen_ids: set[str] = set()
+    fetched_total = len(posts)
+    filtered_total = 0
+
+    log.info("[ih-search] strategy %d — fetched %d posts (threshold=%.2f)", strategy.id, fetched_total, threshold)
 
     for post in posts:
         ext_id = post["external_id"]
@@ -724,8 +749,8 @@ def _search_indiehackers_for_strategy(strategy: BusinessStrategy, db) -> int:
                 buyer_phrases=phrases,
             )
             intent = float(scored.get("intent_score", 0))
-            threshold = _effective_threshold(strategy, multiplier=0.75)
             if intent < threshold:
+                filtered_total += 1
                 continue
 
             author_location = (scored.get("contact") or {}).get("location")
@@ -739,8 +764,7 @@ def _search_indiehackers_for_strategy(strategy: BusinessStrategy, db) -> int:
         except Exception:
             log.exception("IndieHackers search scoring failed for post %s", ext_id)
 
-    if saved:
-        log.info("[ih-search] strategy %d — %d leads", strategy.id, saved)
+    log.info("[ih-search] strategy %d — fetched=%d filtered=%d leads=%d", strategy.id, fetched_total, filtered_total, saved)
     return saved
 
 
@@ -759,14 +783,18 @@ def _search_telegram_for_strategy(strategy: BusinessStrategy, db) -> int:
     }
     target_locations = [str(loc).strip() for loc in (strategy.target_locations or [])]
 
+    threshold = _effective_threshold(strategy, multiplier=0.5)
     saved = 0
     seen_ids: set[str] = set()
+    fetched_total = 0
+    filtered_total = 0
     queries = phrases[:4] + ([" ".join(keywords[:3])] if keywords else [])
 
     for query in queries:
         if not query.strip():
             continue
         for post in search_telegram_posts(query, limit=10):
+            fetched_total += 1
             ext_id = post["external_id"]
             if ext_id in seen_ids:
                 continue
@@ -779,8 +807,8 @@ def _search_telegram_for_strategy(strategy: BusinessStrategy, db) -> int:
                     buyer_phrases=phrases,
                 )
                 intent = float(scored.get("intent_score", 0))
-                threshold = _effective_threshold(strategy, multiplier=0.75)
                 if intent < threshold:
+                    filtered_total += 1
                     continue
 
                 author_location = (scored.get("contact") or {}).get("location")
@@ -794,8 +822,8 @@ def _search_telegram_for_strategy(strategy: BusinessStrategy, db) -> int:
             except Exception:
                 log.exception("Telegram search scoring failed for post %s", ext_id)
 
-    if saved:
-        log.info("[telegram-search] strategy %d — %d leads", strategy.id, saved)
+    log.info("[telegram-search] strategy %d — fetched=%d filtered=%d leads=%d threshold=%.2f",
+             strategy.id, fetched_total, filtered_total, saved, threshold)
     return saved
 
 
@@ -815,8 +843,13 @@ def _search_jobboards_for_strategy(strategy: BusinessStrategy, db) -> int:
     target_locations = [str(loc).strip() for loc in (strategy.target_locations or [])]
 
     posts = search_job_board_posts(keywords=keywords, buyer_phrases=phrases, limit=30)
+    threshold = _effective_threshold(strategy, multiplier=0.5)
     saved = 0
     seen_ids: set[str] = set()
+    fetched_total = len(posts)
+    filtered_total = 0
+
+    log.info("[jobboard-search] strategy %d — fetched %d posts (threshold=%.2f)", strategy.id, fetched_total, threshold)
 
     for post in posts:
         ext_id = post["external_id"]
@@ -831,8 +864,8 @@ def _search_jobboards_for_strategy(strategy: BusinessStrategy, db) -> int:
                 buyer_phrases=phrases,
             )
             intent = float(scored.get("intent_score", 0))
-            threshold = _effective_threshold(strategy, multiplier=0.75)
             if intent < threshold:
+                filtered_total += 1
                 continue
 
             # Prefer location from job posting if scorer didn't find one
@@ -847,8 +880,7 @@ def _search_jobboards_for_strategy(strategy: BusinessStrategy, db) -> int:
         except Exception:
             log.exception("Job board search scoring failed for post %s", ext_id)
 
-    if saved:
-        log.info("[jobboard-search] strategy %d — %d leads", strategy.id, saved)
+    log.info("[jobboard-search] strategy %d — fetched=%d filtered=%d leads=%d", strategy.id, fetched_total, filtered_total, saved)
     return saved
 
 
