@@ -1,7 +1,7 @@
 import json
 import logging
 import re
-from backend.llm import llm_call
+from backend.llm import llm_call  # Groq/Anthropic abstraction — do not use anthropic directly
 
 log = logging.getLogger(__name__)
 
