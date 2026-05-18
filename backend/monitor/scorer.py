@@ -8,12 +8,19 @@ log = logging.getLogger(__name__)
 
 def _parse_json(text: str) -> dict:
     text = text.strip()
+    if not text:
+        raise ValueError("LLM returned empty response")
+    # Try stripping code fences first (but only if the inner content is non-empty)
     match = re.search(r"```(?:json)?\s*([\s\S]*?)```", text)
     if match:
-        text = match.group(1).strip()
+        inner = match.group(1).strip()
+        if inner:
+            text = inner
+    # Try raw parse
     try:
         return json.loads(text)
     except json.JSONDecodeError:
+        # Fall back to first {...} block in case there's surrounding prose
         brace = re.search(r"\{[\s\S]*\}", text)
         if brace:
             return json.loads(brace.group(0))

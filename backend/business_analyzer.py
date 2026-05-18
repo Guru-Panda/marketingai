@@ -29,14 +29,18 @@ def _parse_json(text: str) -> dict:
     """
     text = text.strip()
 
-    # 1. Try stripping code fences first
+    if not text:
+        raise ValueError("LLM returned empty response")
+
+    # 1. Try stripping code fences first (skip if inner content is empty)
     fence_match = re.search(r"```(?:json)?\s*([\s\S]*?)```", text)
     if fence_match:
         candidate = fence_match.group(1).strip()
-        try:
-            return json.loads(candidate)
-        except json.JSONDecodeError:
-            pass
+        if candidate:
+            try:
+                return json.loads(candidate)
+            except json.JSONDecodeError:
+                pass
 
     # 2. Try the raw text as-is
     try:
