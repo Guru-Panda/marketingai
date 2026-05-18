@@ -89,7 +89,11 @@ def _fetch_url_text(url: str) -> str:
 
 
 def _enrich_user_text(user_text: str) -> str:
-    """If the user pasted a URL, fetch the page and prepend its content."""
+    """If the user pasted a URL, fetch the page and prepend its content.
+
+    If the page cannot be fetched, still note the URL so Claude can infer
+    business context from the domain name itself.
+    """
     url_pattern = re.compile(
         r"(https?://[^\s]+|www\.[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}(?:/[^\s]*)?)"
     )
@@ -98,10 +102,17 @@ def _enrich_user_text(user_text: str) -> str:
         return user_text
     url = match.group(1)
     page_text = _fetch_url_text(url)
-    if not page_text:
-        return user_text
+    if page_text:
+        return (
+            f"Website content scraped from {url}:\n{page_text}\n\n"
+            f"Additional context from user: {user_text}"
+        )
+    # URL provided but page couldn't be scraped — pass URL alone so Claude
+    # can infer business context from the domain name
+    log.info("_enrich_user_text: could not scrape %s, passing URL as hint only", url)
     return (
-        f"Website content scraped from {url}:\n{page_text}\n\n"
+        f"The user provided this website URL: {url}\n"
+        f"(The page could not be fetched — infer business context from the domain name and any other details below.)\n\n"
         f"Additional context from user: {user_text}"
     )
 
@@ -110,6 +121,10 @@ def analyze_business(user_text: str) -> dict:
     """Extract main_problem, ideal_customer, keywords, and buyer_phrases from free-form user text."""
     user_text = _enrich_user_text(user_text)
     prompt = f"""Analyze the following business description and extract structured information.
+
+CRITICAL: You MUST always return a valid JSON object — even if the description is vague, sparse, or only a URL.
+If you cannot determine a field with certainty, make a reasonable inference based on available context (domain name, keywords, etc.).
+Never return an explanation or refusal — only JSON.
 
 Return ONLY a valid JSON object with exactly these fields:
 {{
@@ -141,7 +156,7 @@ Business description:
 
     response = _get_client().messages.create(
         model="claude-opus-4-5",
-        max_tokens=1024,
+        max_tokens=2048,
         messages=[{"role": "user", "content": prompt}],
     )
 
