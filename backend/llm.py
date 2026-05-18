@@ -58,6 +58,13 @@ _RATE_LIMIT_RE = re.compile(r"try again in ([\d.]+)s", re.IGNORECASE)
 _GROQ_MIN_INTERVAL = 2.0
 _last_groq_call_at: float = 0.0
 
+# ── Per-session model exhaustion cache ───────────────────────────────────────
+# When a model hits its daily quota (TPD 429) we skip it for the rest of the
+# process lifetime (typically until the next Railway deploy / restart, which
+# is well within the 24-hour reset window).  This avoids wasting a network
+# round-trip on every call when we already know a model is exhausted.
+_exhausted_models: set[str] = set()
+
 
 class _EmptyResponseError(Exception):
     pass
@@ -122,10 +129,14 @@ def llm_call(
     if groq_key:
         chain = _GROQ_HQ_CHAIN if high_quality else _GROQ_FAST_CHAIN
         for model in chain:
+            if model in _exhausted_models:
+                log.debug("Groq model %s skipped (daily limit cached)", model)
+                continue
             for attempt in range(4):  # 1 call + 3 TPM retries per model
                 try:
                     return _groq_call(prompt, max_tokens, model)
                 except _DailyLimitError as e:
+                    _exhausted_models.add(model)
                     log.warning("Groq model %s daily limit hit, trying next model", model)
                     break  # advance to next model in chain
                 except _EmptyResponseError as e:

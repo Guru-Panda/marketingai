@@ -84,8 +84,9 @@ def _smtp_send(msg: MIMEMultipart, to_email: str) -> None:
             "Update SMTP_PASSWORD in .env with a valid Gmail App Password: "
             "https://myaccount.google.com/apppasswords"
         )
-    except Exception:
-        logger.exception("SMTP send failed for %s", to_email)
+    except Exception as exc:
+        _smtp_available = False
+        logger.warning("SMTP unavailable (%s) — email alerts silenced until restart", type(exc).__name__)
 
 
 def send_new_lead_alert(
