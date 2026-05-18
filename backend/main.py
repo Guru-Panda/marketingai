@@ -42,7 +42,7 @@ _scheduler.add_job(
     replace_existing=True,
     max_instances=1,
     misfire_grace_time=3600,
-    next_run_time=datetime.now(timezone.utc),
+    # next_run_time=datetime.now(timezone.utc),  # disabled: don't burn tokens on every deploy
 )
 
 
