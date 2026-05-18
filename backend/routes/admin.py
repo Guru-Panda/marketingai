@@ -35,3 +35,18 @@ def trigger_channel_refresh(background_tasks: BackgroundTasks):
     from backend.channel_refresh import refresh_suggested_channels
     background_tasks.add_task(refresh_suggested_channels)
     return {"detail": "Channel refresh started in background"}
+
+
+@router.get("/debug-scorer", dependencies=[Depends(_require_admin)])
+def debug_scorer():
+    """Show what LLM backend scorer.py is using."""
+    import inspect
+    import backend.monitor.scorer as scorer_mod
+    src = inspect.getsource(scorer_mod.score_post)
+    uses_llm_call = "llm_call" in src
+    uses_anthropic = "_get_client" in src or "messages.create" in src
+    return {
+        "uses_llm_call": uses_llm_call,
+        "uses_anthropic_directly": uses_anthropic,
+        "first_200_chars": src[:200],
+    }
