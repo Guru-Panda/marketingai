@@ -29,14 +29,16 @@ log = logging.getLogger(__name__)
 # ── Groq model chains ─────────────────────────────────────────────────────────
 # Each model has its own independent 500 K tokens/day free-tier bucket.
 # We try them in order; on a daily-limit (TPD) error we advance the chain.
+# Models verified active as of 2026-05 via GET /openai/v1/models.
 _GROQ_FAST_CHAIN = [
-    "llama-3.1-8b-instant",   # 6 000 TPM,  500 K TPD
-    "gemma2-9b-it",            # 15 000 TPM, 500 K TPD  ← fallback
-    "llama-3.3-70b-versatile", # 6 000 TPM,  500 K TPD  ← last resort
+    "llama-3.1-8b-instant",                    # fast, low cost
+    "meta-llama/llama-4-scout-17b-16e-instruct", # fallback — independent daily quota
+    "llama-3.3-70b-versatile",                  # last resort
 ]
 _GROQ_HQ_CHAIN = [
-    "llama-3.3-70b-versatile", # primary HQ model
-    "gemma2-9b-it",            # fallback if 70B daily quota exhausted
+    "llama-3.3-70b-versatile",                  # primary HQ model
+    "meta-llama/llama-4-scout-17b-16e-instruct", # fallback if 70B quota exhausted
+    "qwen/qwen3-32b",                            # last resort
 ]
 
 # ── Anthropic models ──────────────────────────────────────────────────────────
