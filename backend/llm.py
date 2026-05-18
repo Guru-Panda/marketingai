@@ -5,10 +5,10 @@ Priority:
   1. Groq  — if GROQ_API_KEY is set (free tier, no credit card needed)
   2. Anthropic — if ANTHROPIC_API_KEY is set (paid)
 
-On Groq 429 rate-limit errors the call retries up to 3 times with the
-suggested wait time (extracted from the error message) instead of falling
-back to Anthropic.  This keeps the sync working on the free tier even when
-bulk scoring briefly saturates the 6 000 TPM quota.
+Rate-limit handling:
+  - Groq 429 → sleep the suggested wait time, retry up to 3 times.
+  - Empty/None response → treated as a transient error, retried the same way.
+  - Other Groq errors → fall back to Anthropic if key is set, else raise.
 
 Usage:
     from backend.llm import llm_call
@@ -24,8 +24,6 @@ from backend.database import settings
 log = logging.getLogger(__name__)
 
 # ── Groq models ───────────────────────────────────────────────────────────────
-# high_quality=True  → larger model for analysis / channel suggestion
-# high_quality=False → smaller/faster model for bulk post scoring
 _GROQ_HQ_MODEL   = "llama-3.3-70b-versatile"
 _GROQ_FAST_MODEL = "llama-3.1-8b-instant"
 
@@ -38,6 +36,13 @@ _groq_client      = None
 _anthropic_client = None
 
 _RATE_LIMIT_RE = re.compile(r"try again in ([\d.]+)s", re.IGNORECASE)
+
+# Minimum gap between consecutive Groq calls to smooth out TPM usage.
+# llama-3.1-8b-instant: 6 000 TPM free tier.
+# A score_post call uses ~400 tokens → max ~15 calls/min → 1 call per 4s.
+# Using 2s keeps us safely under while not being too slow.
+_GROQ_MIN_INTERVAL = 2.0
+_last_groq_call_at: float = 0.0
 
 
 def _get_groq():
@@ -60,10 +65,19 @@ def _is_rate_limit(exc: Exception) -> bool:
     return "429" in str(exc) or "rate_limit" in str(exc).lower()
 
 
+def _is_transient(exc: Exception) -> bool:
+    """True for errors worth retrying (rate-limit or empty response)."""
+    return _is_rate_limit(exc) or isinstance(exc, _EmptyResponseError)
+
+
 def _wait_seconds(exc: Exception) -> float:
     """Extract retry-after seconds from Groq rate-limit error, default 10s."""
     m = _RATE_LIMIT_RE.search(str(exc))
     return float(m.group(1)) + 1.0 if m else 10.0
+
+
+class _EmptyResponseError(Exception):
+    pass
 
 
 def llm_call(
@@ -73,9 +87,8 @@ def llm_call(
 ) -> str:
     """Call the best available LLM and return the text response.
 
-    Groq rate-limit (429) → sleep the suggested wait time, then retry (×3).
-    Other Groq errors → fall back to Anthropic if key is set.
-    Raises if all options are exhausted.
+    Groq rate-limit / empty response → sleep + retry (×3).
+    Other Groq errors → fall back to Anthropic if key is set, else raise.
     """
     groq_key      = getattr(settings, "GROQ_API_KEY", "")
     anthropic_key = getattr(settings, "ANTHROPIC_API_KEY", "")
@@ -85,15 +98,20 @@ def llm_call(
             try:
                 return _groq_call(prompt, max_tokens, high_quality)
             except Exception as e:
-                if _is_rate_limit(e) and attempt < 3:
-                    wait = _wait_seconds(e)
-                    log.info("Groq rate-limited, sleeping %.1fs (attempt %d/3)", wait, attempt + 1)
+                if _is_transient(e) and attempt < 3:
+                    wait = _wait_seconds(e) if _is_rate_limit(e) else 5.0
+                    log.info(
+                        "Groq transient error (%s), sleeping %.1fs (attempt %d/3)",
+                        type(e).__name__, wait, attempt + 1,
+                    )
                     time.sleep(wait)
                     continue
-                # Non-rate-limit error, or exhausted retries → try Anthropic
                 log.warning("Groq call failed after %d attempt(s): %s", attempt + 1, e)
                 if anthropic_key:
-                    return _anthropic_call(prompt, max_tokens, high_quality)
+                    try:
+                        return _anthropic_call(prompt, max_tokens, high_quality)
+                    except Exception as ae:
+                        log.warning("Anthropic fallback also failed: %s", ae)
                 raise
 
     if anthropic_key:
@@ -105,6 +123,13 @@ def llm_call(
 
 
 def _groq_call(prompt: str, max_tokens: int, high_quality: bool) -> str:
+    global _last_groq_call_at
+
+    # Smooth out TPM: enforce minimum gap between calls
+    gap = time.monotonic() - _last_groq_call_at
+    if gap < _GROQ_MIN_INTERVAL:
+        time.sleep(_GROQ_MIN_INTERVAL - gap)
+
     model = _GROQ_HQ_MODEL if high_quality else _GROQ_FAST_MODEL
     client = _get_groq()
     response = client.chat.completions.create(
@@ -113,7 +138,11 @@ def _groq_call(prompt: str, max_tokens: int, high_quality: bool) -> str:
         messages=[{"role": "user", "content": prompt}],
         temperature=0.2,
     )
-    text = response.choices[0].message.content or ""
+    _last_groq_call_at = time.monotonic()
+
+    text = response.choices[0].message.content
+    if not text:
+        raise _EmptyResponseError(f"Groq [{model}] returned empty content")
     log.debug("Groq [%s] → %d chars", model, len(text))
     return text.strip()
 
