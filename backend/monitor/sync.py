@@ -210,7 +210,7 @@ def _fetch_posts(channel: Channel, keywords: list[str] = [], db=None) -> list[di
     if pt == "job_board":
         return fetch_job_board_posts(channel.name, channel.url, keywords)
     if pt == "quora":
-        return fetch_quora_posts(keywords)
+        return []  # Quora has no accessible public API
     if pt == "hackernews":
         return fetch_hn_posts(channel.name)
     if pt == "stackoverflow":
