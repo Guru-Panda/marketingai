@@ -55,65 +55,105 @@ def _parse_json(text: str) -> dict:
     raise ValueError(f"No valid JSON found in Claude response: {text[:300]}")
 
 
-def _fetch_url_text(url: str) -> str:
-    """Fetch a webpage and return its visible text (max 3000 chars)."""
+_SCRAPE_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+}
+
+
+def _scrape_one(url: str) -> str:
+    """Try to fetch one URL and return cleaned visible text, or '' on failure."""
     try:
-        if not url.startswith("http"):
-            url = "https://" + url
-        resp = httpx.get(
-            url,
-            timeout=15,
-            follow_redirects=True,
-            headers={
-                "User-Agent": (
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/124.0.0.0 Safari/537.36"
-                ),
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                "Accept-Language": "en-US,en;q=0.9",
-            },
-        )
+        resp = httpx.get(url, timeout=15, follow_redirects=True, headers=_SCRAPE_HEADERS)
         if resp.status_code >= 400:
-            log.warning("_fetch_url_text: %s returned HTTP %d", url, resp.status_code)
             return ""
         soup = BeautifulSoup(resp.text, "html.parser")
-        for tag in soup(["script", "style", "nav", "footer", "header"]):
+        for tag in soup(["script", "style", "nav", "footer", "header", "aside"]):
             tag.decompose()
         text = " ".join(soup.get_text(separator=" ").split())
-        log.info("_fetch_url_text: scraped %d chars from %s", len(text), url)
-        return text[:3000]
+        # Ignore Cloudflare/bot-challenge pages (very short or keyword-flagged)
+        if len(text) < 100 or "enable javascript" in text.lower() or "checking your browser" in text.lower():
+            return ""
+        return text[:4000]
     except Exception:
-        log.warning("_fetch_url_text: failed to fetch %s", url)
         return ""
 
 
-def _enrich_user_text(user_text: str) -> str:
-    """If the user pasted a URL, fetch the page and prepend its content.
+def _fetch_url_text(raw_url: str) -> str:
+    """Fetch a webpage and return its visible text.
 
-    If the page cannot be fetched, still note the URL so Claude can infer
-    business context from the domain name itself.
+    Tries several URL variants in order until one succeeds:
+    1. The URL exactly as given (with https:// prepended if missing)
+    2. If www. prefix present → try without it
+    3. If no www. prefix → try with it
+    4. Root domain (drop any path) — useful when the homepage loads but a subpage 404s
+    """
+    if not raw_url.startswith("http"):
+        raw_url = "https://" + raw_url
+
+    from urllib.parse import urlparse, urlunparse
+    parsed = urlparse(raw_url)
+    hostname = parsed.hostname or ""
+
+    candidates: list[str] = [raw_url]
+
+    # Toggle www
+    if hostname.startswith("www."):
+        no_www = urlunparse(parsed._replace(netloc=hostname[4:]))
+        candidates.append(no_www)
+    else:
+        with_www = urlunparse(parsed._replace(netloc="www." + hostname))
+        candidates.append(with_www)
+
+    # Root domain (scheme + host only) if we have a path
+    if parsed.path and parsed.path != "/":
+        root = urlunparse(parsed._replace(path="/", query="", fragment=""))
+        candidates.append(root)
+
+    for url in candidates:
+        text = _scrape_one(url)
+        if text:
+            log.info("_fetch_url_text: scraped %d chars from %s", len(text), url)
+            return text
+
+    log.warning("_fetch_url_text: all variants failed for %s", raw_url)
+    return ""
+
+
+def _enrich_user_text(user_text: str) -> str:
+    """If the user mentioned a URL, fetch the page and prepend its content.
+
+    If scraping fails entirely, still pass the URL to Claude so it can
+    infer business context from the domain name.
     """
     url_pattern = re.compile(
-        r"(https?://[^\s]+|www\.[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}(?:/[^\s]*)?)"
+        r"(https?://[^\s]+|www\.[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}(?:/[^\s]*)?|"
+        r"[a-zA-Z0-9.-]+\.(?:com|co\.uk|io|ai|app|co|net|org|dev)(?:/[^\s]*)?)"
     )
     match = url_pattern.search(user_text)
     if not match:
         return user_text
+
     url = match.group(1)
     page_text = _fetch_url_text(url)
+
     if page_text:
         return (
             f"Website content scraped from {url}:\n{page_text}\n\n"
             f"Additional context from user: {user_text}"
         )
-    # URL provided but page couldn't be scraped — pass URL alone so Claude
-    # can infer business context from the domain name
-    log.info("_enrich_user_text: could not scrape %s, passing URL as hint only", url)
+
+    # Scrape failed — pass URL as hint so Claude can infer from domain name
+    log.info("_enrich_user_text: could not scrape %s, using as domain hint", url)
     return (
-        f"The user provided this website URL: {url}\n"
-        f"(The page could not be fetched — infer business context from the domain name and any other details below.)\n\n"
-        f"Additional context from user: {user_text}"
+        f"The user's website URL: {url}\n"
+        f"(Page could not be fetched — infer business context from the domain name.)\n\n"
+        f"User's description: {user_text}"
     )
 
 
