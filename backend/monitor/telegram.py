@@ -75,7 +75,7 @@ def _parse_subscriber_count(soup: BeautifulSoup) -> int | None:
         text = el.get_text(strip=True).lower()
         if "subscriber" in text or "member" in text:
             # Strip labels and whitespace, keep digits, dots, K/M suffixes
-            raw = re.sub(r"[subscribers|members|\s,]", "", text)
+            raw = re.sub(r"[^0-9km.]", "", text)
             raw = raw.strip()
             try:
                 if raw.endswith("k"):
@@ -136,12 +136,12 @@ def fetch_channel_posts(channel_username: str, limit: int = 20) -> list[dict]:
                 author_url = author_link_el.get("href") or None
 
             posts.append({
-                "external_id": msg_id,
+                "external_id": f"tg-{username}-{msg_id}",
                 "content": text,
                 "source_url": f"https://t.me/{username}/{msg_id}",
                 "author_name": author_name,
-                "author_username": author_name,
-                "author_url": author_url,
+                "author_username": f"@{username}",
+                "author_url": f"https://t.me/{username}",
             })
 
         posts = posts[:limit]

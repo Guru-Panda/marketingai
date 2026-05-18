@@ -65,8 +65,8 @@ def search_posts(query: str, tags: list[str] | None = None, limit: int = 20) -> 
         posts = [_build_post(item) for item in resp.json().get("items", [])]
         log.info("SO search '%s': %d results", query[:60], len(posts))
         return posts
-    except Exception:
-        log.exception("SO search failed for '%s'", query[:60])
+    except Exception as e:
+        log.warning("SO search failed for '%s': %s", query[:60], e)
         return []
 
 
