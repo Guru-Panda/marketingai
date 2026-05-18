@@ -1,18 +1,19 @@
 import json
 import logging
 import re
-import anthropic
 import httpx
 from bs4 import BeautifulSoup
-from backend.database import settings
+from backend.llm import llm_call
 
 log = logging.getLogger(__name__)
 
-_client: anthropic.Anthropic | None = None
+
+def _unused_client():  # kept so existing imports don't break
+    pass
 
 
-def _get_client() -> anthropic.Anthropic:
-    global _client
+def _get_client():  # kept so existing imports don't break
+    global _unused_client
     if _client is None:
         _client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
     return _client
@@ -194,20 +195,11 @@ IMPORTANT for business_type and intent_threshold:
 Business description:
 {user_text}"""
 
-    response = _get_client().messages.create(
-        model="claude-3-5-sonnet-20241022",
-        max_tokens=2048,
-        messages=[{"role": "user", "content": prompt}],
-    )
-
-    text_blocks = [b.text for b in response.content if b.type == "text"]
-    if not text_blocks:
-        raise ValueError("Claude returned no text content for business analysis")
-    text = text_blocks[0]
+    text = llm_call(prompt, max_tokens=2048, high_quality=True)
     try:
         return _parse_json(text)
     except Exception:
-        log.error("analyze_business: JSON parse failed. Claude raw response:\n%s", text)
+        log.error("analyze_business: JSON parse failed. Raw response:\n%s", text)
         raise
 
 
@@ -287,16 +279,7 @@ Rules:
 - AVOID broad general communities — they create noise, not leads.
 - NEVER suggest communities you are not confident exist and are active. Quality over quantity."""
 
-    response = _get_client().messages.create(
-        model="claude-3-5-sonnet-20241022",
-        max_tokens=4096,
-        messages=[{"role": "user", "content": prompt}],
-    )
-
-    text_blocks = [b.text for b in response.content if b.type == "text"]
-    if not text_blocks:
-        raise ValueError("Claude returned no text content for channel suggestions")
-    text = text_blocks[0]
+    text = llm_call(prompt, max_tokens=4096, high_quality=True)
     try:
         return _parse_json(text)
     except Exception:

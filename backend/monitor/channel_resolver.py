@@ -28,14 +28,8 @@ _HTTP_RE = re.compile(r'https?://\S+')
 
 
 def _ask_claude(platform_type: str, name: str) -> str | None:
-    """
-    Ask Claude for the real URL of a community.
-    Returns a URL string or None.
-    """
-    import anthropic
-
-    if not settings.ANTHROPIC_API_KEY:
-        return None
+    """Ask the LLM for the real URL of a community. Returns a URL string or None."""
+    from backend.llm import llm_call
 
     client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
 
@@ -69,19 +63,13 @@ def _ask_claude(platform_type: str, name: str) -> str | None:
     )
 
     try:
-        response = client.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=60,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        text = response.content[0].text.strip()
+        text = llm_call(prompt, max_tokens=60, high_quality=False)
         if text.lower() == "unknown" or not text.startswith("http"):
             return None
-        # Basic sanity check: must look like a real URL
         if _HTTP_RE.match(text):
-            return text.split()[0]  # discard anything after a space
+            return text.split()[0]
     except Exception:
-        log.debug("Claude URL resolve failed for [%s] %s", platform_type, name)
+        log.debug("LLM URL resolve failed for [%s] %s", platform_type, name)
 
     return None
 

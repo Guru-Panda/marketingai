@@ -1,19 +1,23 @@
 import json
 import logging
 import re
-import anthropic
-from backend.database import settings
+from backend.llm import llm_call
 
 log = logging.getLogger(__name__)
 
-_client: anthropic.Anthropic | None = None
 
-
-def _get_client() -> anthropic.Anthropic:
-    global _client
-    if _client is None:
-        _client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
-    return _client
+def _parse_json(text: str) -> dict:
+    text = text.strip()
+    match = re.search(r"```(?:json)?\s*([\s\S]*?)```", text)
+    if match:
+        text = match.group(1).strip()
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        brace = re.search(r"\{[\s\S]*\}", text)
+        if brace:
+            return json.loads(brace.group(0))
+        raise
 
 
 def score_post(
@@ -23,7 +27,7 @@ def score_post(
     ideal_customer: str = "",
     buyer_phrases: list[str] | None = None,
 ) -> dict:
-    """Score a post for purchase/hiring intent using Claude Haiku.
+    """Score a post for purchase/hiring intent.
     Returns: {intent_score, summary, keywords, contact: {email, phone, location}}
     """
     kw_str = ", ".join(keywords) if keywords else "business solutions"
@@ -34,7 +38,7 @@ def score_post(
     if ideal_customer:
         context_lines.append(f"Ideal customer: {ideal_customer}")
     if buyer_phrases:
-        context_lines.append(f"Example buyer phrases to look for:\n" + "\n".join(f"  - {p}" for p in buyer_phrases[:8]))
+        context_lines.append("Example buyer phrases to look for:\n" + "\n".join(f"  - {p}" for p in buyer_phrases[:8]))
     context_lines.append(f"Related keywords: {kw_str}")
     context_block = "\n".join(context_lines)
 
@@ -69,16 +73,8 @@ Return ONLY valid JSON:
   }}
 }}"""
 
-    response = _get_client().messages.create(
-        model="claude-haiku-4-5-20251001",
-        max_tokens=350,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    text = next(b.text for b in response.content if b.type == "text").strip()
-    match = re.search(r"```(?:json)?\s*([\s\S]*?)```", text)
-    if match:
-        text = match.group(1).strip()
-    return json.loads(text)
+    text = llm_call(prompt, max_tokens=350, high_quality=False)
+    return _parse_json(text)
 
 
 _TONE_PROMPTS = {
@@ -110,14 +106,8 @@ def generate_outreach(
     extra_context: str = "",
     tone: str | None = None,
 ) -> str:
-    """Generate a personalised, ready-to-send outreach message for a lead.
-    Returns a plain-text draft. Raises on API error.
-    tone can be: casual | professional | direct | empathetic (overrides platform default)
-    """
-    if tone and tone in _TONE_PROMPTS:
-        tone_str = _TONE_PROMPTS[tone]
-    else:
-        tone_str = _PLATFORM_TONES.get(platform, "professional and helpful")
+    """Generate a personalised outreach message for a lead."""
+    tone_str = _TONE_PROMPTS.get(tone or "", "") or _PLATFORM_TONES.get(platform, "professional and helpful")
 
     prompt = f"""Write a personalised outreach message for a potential customer based on their post.
 
@@ -143,22 +133,14 @@ Write a SHORT outreach message (max 120 words) that:
 
 Return ONLY the message text, no preamble, no subject line."""
 
-    response = _get_client().messages.create(
-        model="claude-haiku-4-5-20251001",
-        max_tokens=300,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    return next(b.text for b in response.content if b.type == "text").strip()
+    return llm_call(prompt, max_tokens=300, high_quality=False)
 
 
 def extract_contacts(texts: list[str]) -> dict:
-    """Extract email, phone, location, and real name from profile/activity text snippets.
-    Returns: {email, phone, location, name}
-    """
+    """Extract email, phone, location, and real name from profile/activity text snippets."""
     if not texts:
         return {}
 
-    # Combine snippets, trim to a reasonable context window
     combined = "\n\n---\n\n".join(t[:800] for t in texts[:15])[:4000]
 
     prompt = f"""You are extracting contact information from a person's social media profile and activity.
@@ -175,16 +157,8 @@ Return ONLY valid JSON with what you found (use null for anything not found):
   "name": "<real full name if clearly stated, not a username — or null>"
 }}"""
 
-    response = _get_client().messages.create(
-        model="claude-haiku-4-5-20251001",
-        max_tokens=150,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    text = next(b.text for b in response.content if b.type == "text").strip()
-    match = re.search(r"```(?:json)?\s*([\s\S]*?)```", text)
-    if match:
-        text = match.group(1).strip()
+    text = llm_call(prompt, max_tokens=150, high_quality=False)
     try:
-        return json.loads(text)
+        return _parse_json(text)
     except Exception:
         return {}

@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
     DATABASE_URL: str = "sqlite:///./app.db"
     ANTHROPIC_API_KEY: str = ""
+    GROQ_API_KEY: str = ""
     ADMIN_KEY: str = "change-me-admin-secret"
     SMTP_HOST: str = ""
     SMTP_PORT: int = 587
@@ -20,6 +21,10 @@ class Settings(BaseSettings):
     SMTP_FROM: str = ""
     DISCORD_BOT_TOKEN: str = ""
     HUNTER_API_KEY: str = ""
+    REDDIT_CLIENT_ID: str = ""
+    REDDIT_CLIENT_SECRET: str = ""
+    GITHUB_TOKEN: str = ""
+    STACKOVERFLOW_KEY: str = ""
     SYNC_INTERVAL_HOURS: float = 4
     INTENT_THRESHOLD: float = 0.7
     FRONTEND_URL: str = "http://localhost:5173"
