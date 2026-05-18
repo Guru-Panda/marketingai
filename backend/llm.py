@@ -142,9 +142,16 @@ def _groq_call(prompt: str, max_tokens: int, high_quality: bool) -> str:
 
     text = response.choices[0].message.content
     if not text:
-        raise _EmptyResponseError(f"Groq [{model}] returned empty content")
-    log.debug("Groq [%s] → %d chars", model, len(text))
-    return text.strip()
+        raise _EmptyResponseError(f"Groq [{model}] returned None content")
+    stripped = text.strip()
+    if not stripped:
+        raise _EmptyResponseError(f"Groq [{model}] returned whitespace-only content")
+    # Empty code fence (```json\n```) is semantically empty — retry rather than
+    # passing a backtick-starting string to the JSON parser.
+    if re.match(r'^```(?:json)?\s*```$', stripped):
+        raise _EmptyResponseError(f"Groq [{model}] returned empty code fence block")
+    log.debug("Groq [%s] → %d chars", model, len(stripped))
+    return stripped
 
 
 def _anthropic_call(prompt: str, max_tokens: int, high_quality: bool) -> str:

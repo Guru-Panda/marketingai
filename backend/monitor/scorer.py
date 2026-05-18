@@ -80,8 +80,17 @@ Return ONLY valid JSON:
   }}
 }}"""
 
-    text = llm_call(prompt, max_tokens=350, high_quality=False)
-    return _parse_json(text)
+    try:
+        text = llm_call(prompt, max_tokens=350, high_quality=False)
+        return _parse_json(text)
+    except Exception as exc:
+        log.warning("score_post LLM/parse failed (%s), returning score=0", exc)
+        return {
+            "intent_score": 0.0,
+            "summary": "Scoring failed — could not parse LLM response.",
+            "keywords": [],
+            "contact": {"email": None, "phone": None, "location": None},
+        }
 
 
 _TONE_PROMPTS = {
