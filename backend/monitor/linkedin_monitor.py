@@ -113,6 +113,12 @@ def _search_ddg(query: str, limit: int) -> list[dict]:
         return []
 
 
+def search_posts(query: str, limit: int = 20) -> list[dict]:
+    """Search LinkedIn via DuckDuckGo for buyer intent posts."""
+    full_query = f"site:linkedin.com {query}"
+    return _search_ddg(full_query, limit)
+
+
 def fetch_posts(
     channel_name: str,
     channel_url: str | None,

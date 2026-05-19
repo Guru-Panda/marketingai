@@ -6,17 +6,19 @@ from backend.email_utils import send_new_lead_alert
 from backend.model import BusinessStrategy, Channel, Lead, User
 from backend.monitor.discord_monitor import fetch_channel_messages
 from backend.monitor.job_board_monitor import fetch_posts as fetch_job_board_posts, search_posts as search_job_board_posts
-from backend.monitor.linkedin_monitor import fetch_posts as fetch_linkedin_posts
+from backend.monitor.linkedin_monitor import fetch_posts as fetch_linkedin_posts, search_posts as search_linkedin_posts
 from backend.monitor.profile_scraper import (
     fetch_discord_user_history,
     fetch_reddit_author,
     fetch_telegram_profile,
+    try_hunter_enrich,
 )
+from backend.monitor.quora_monitor import fetch_posts as fetch_quora_posts
 from backend.monitor.reddit import fetch_posts as fetch_reddit_posts, search_posts as search_reddit_posts
 from backend.monitor.hackernews_monitor import fetch_posts as fetch_hn_posts, search_posts as search_hn_posts
 from backend.monitor.stackoverflow_monitor import fetch_posts as fetch_so_posts, search_posts as search_so_posts
-from backend.monitor.devto_monitor import fetch_posts as fetch_devto_posts, search_posts as search_devto_posts
-from backend.monitor.github_monitor import fetch_posts as fetch_github_posts, search_issues as search_github_issues
+from backend.monitor.devto_monitor import fetch_posts as fetch_devto_posts
+from backend.monitor.github_monitor import fetch_posts as fetch_github_posts, search_issues as search_github_issues, search_discussions as search_github_discussions
 from backend.monitor.indiehackers_monitor import fetch_posts as fetch_ih_posts
 from backend.monitor.scorer import extract_contacts, generate_outreach, score_post
 from backend.monitor.telegram import fetch_channel_posts, search_posts as search_telegram_channel_posts
@@ -210,7 +212,7 @@ def _fetch_posts(channel: Channel, keywords: list[str] = [], db=None) -> list[di
     if pt == "job_board":
         return fetch_job_board_posts(channel.name, channel.url, keywords)
     if pt == "quora":
-        return []  # Quora has no accessible public API
+        return fetch_quora_posts(keywords=keywords, limit=15)
     if pt == "hackernews":
         return fetch_hn_posts(channel.name)
     if pt == "stackoverflow":
@@ -282,6 +284,15 @@ def sync_channel(channel: Channel, db) -> tuple[int, int]:
                 if profile_contacts.get("name"):
                     post = {**post, "author_name": profile_contacts["name"]}
                 merged_contact = _merge_contacts(profile_contacts, scored.get("contact") or {})
+                # If no email yet, try Hunter.io using name + any website in profile
+                if not merged_contact.get("email"):
+                    hunter_email = try_hunter_enrich(
+                        post.get("author_name") or profile_contacts.get("name", ""),
+                        profile_texts,
+                    )
+                    if hunter_email:
+                        merged_contact["email"] = hunter_email
+                        log.info("[hunter] found email %s for %s", hunter_email, post.get("author_username"))
                 scored = {**scored, "contact": merged_contact}
 
             author_location = (scored.get("contact") or {}).get("location")
@@ -403,6 +414,14 @@ def _search_reddit_for_strategy(strategy: BusinessStrategy, db) -> int:
                     if profile_contacts.get("name"):
                         post = {**post, "author_name": profile_contacts["name"]}
                     merged = _merge_contacts(profile_contacts, scored.get("contact") or {})
+                    if not merged.get("email"):
+                        hunter_email = try_hunter_enrich(
+                            post.get("author_name") or profile_contacts.get("name", ""),
+                            profile_texts,
+                        )
+                        if hunter_email:
+                            merged["email"] = hunter_email
+                            log.info("[hunter] found email %s for reddit u/%s", hunter_email, post.get("author_username"))
                     scored = {**scored, "contact": merged}
 
                 author_location = (scored.get("contact") or {}).get("location")
@@ -422,11 +441,60 @@ def _search_reddit_for_strategy(strategy: BusinessStrategy, db) -> int:
 
 
 def _search_quora_for_strategy(strategy: BusinessStrategy, db) -> int:
-    # Quora requires authentication to view content and blocks cloud IPs.
-    # No free public API or RSS feed is available.
-    # Skipping to avoid wasting sync time on empty results.
-    log.debug("[quora-search] strategy %d — skipped (no accessible public API)", strategy.id)
-    return 0
+    phrases = list(strategy.buyer_phrases or [])
+    keywords = list(strategy.keywords or [])
+    if not phrases and not keywords:
+        return 0
+
+    biz = {
+        "main_problem": strategy.main_problem or "",
+        "ideal_customer": strategy.ideal_customer or "",
+        "buyer_phrases": phrases,
+        "keywords": keywords,
+        "intent_threshold": strategy.intent_threshold,
+    }
+    target_locations = [str(loc).strip() for loc in (strategy.target_locations or [])]
+    threshold = _effective_threshold(strategy, multiplier=0.5)
+
+    posts = fetch_quora_posts(keywords=keywords, buyer_phrases=phrases, limit=20)
+    saved = 0
+    seen_ids: set[str] = set()
+    fetched_total = len(posts)
+    filtered_total = 0
+
+    log.info("[quora-search] strategy %d — fetched %d posts (threshold=%.2f)", strategy.id, fetched_total, threshold)
+
+    for post in posts:
+        ext_id = post["external_id"]
+        if ext_id in seen_ids:
+            continue
+        seen_ids.add(ext_id)
+        try:
+            scored = score_post(
+                post["content"], keywords,
+                main_problem=biz["main_problem"],
+                ideal_customer=biz["ideal_customer"],
+                buyer_phrases=phrases,
+            )
+            intent = float(scored.get("intent_score", 0))
+            if intent < threshold:
+                filtered_total += 1
+                continue
+
+            author_location = (scored.get("contact") or {}).get("location")
+            if not _location_matches(author_location, target_locations):
+                continue
+
+            if _save_lead(db, strategy.user_id, "quora", ext_id,
+                          post["content"], scored, post,
+                          strategy_id=strategy.id, biz=biz):
+                saved += 1
+        except Exception:
+            log.exception("Quora search scoring failed for post %s", ext_id)
+
+    log.info("[quora-search] strategy %d — fetched=%d filtered=%d leads=%d threshold=%.2f",
+             strategy.id, fetched_total, filtered_total, saved, threshold)
+    return saved
 
 
 def _search_hackernews_for_strategy(strategy: BusinessStrategy, db) -> int:
@@ -569,14 +637,13 @@ def _search_github_for_strategy(strategy: BusinessStrategy, db) -> int:
     kw_query = " ".join(keywords[:3]) if keywords else ""
     queries = ([kw_query] if kw_query else []) + phrases[:3]
 
-    for query in queries:
-        if not query.strip():
-            continue
-        for post in search_github_issues(query, limit=15):
+    def _process_gh_posts(posts_iter):
+        nonlocal saved, fetched_total, filtered_total
+        for post in posts_iter:
             fetched_total += 1
             ext_id = post["external_id"]
             if ext_id in seen_ids:
-                continue
+                return
             seen_ids.add(ext_id)
             try:
                 scored = score_post(
@@ -588,18 +655,22 @@ def _search_github_for_strategy(strategy: BusinessStrategy, db) -> int:
                 intent = float(scored.get("intent_score", 0))
                 if intent < threshold:
                     filtered_total += 1
-                    continue
-
+                    return
                 author_location = (scored.get("contact") or {}).get("location")
                 if not _location_matches(author_location, target_locations):
-                    continue
-
+                    return
                 if _save_lead(db, strategy.user_id, "github", ext_id,
                               post["content"], scored, post,
                               strategy_id=strategy.id, biz=biz):
                     saved += 1
             except Exception:
                 log.exception("GitHub search scoring failed for post %s", ext_id)
+
+    for query in queries:
+        if not query.strip():
+            continue
+        _process_gh_posts(search_github_issues(query, limit=15))
+        _process_gh_posts(search_github_discussions(query, limit=10))
 
     log.info("[github-search] strategy %d — fetched=%d filtered=%d leads=%d threshold=%.2f",
              strategy.id, fetched_total, filtered_total, saved, threshold)
@@ -627,15 +698,27 @@ def _search_devto_for_strategy(strategy: BusinessStrategy, db) -> int:
     fetched_total = 0
     filtered_total = 0
 
-    # Search using keywords if available, otherwise fall back to buyer phrases
-    search_query = " ".join(keywords[:4]) if keywords else " ".join(w for p in phrases[:2] for w in p.split()[:3])
-    log.info("[devto-search] strategy %d — query=%r threshold=%.2f", strategy.id, search_query, threshold)
-    for post in search_devto_posts(search_query, limit=20):
-        fetched_total += 1
+    # Dev.to search is tag-based — search each keyword individually as a tag
+    # (joining keywords into one phrase breaks because Dev.to has no full-text search)
+    tag_targets = [kw.lower().replace(" ", "").replace("-", "").replace("_", "")
+                   for kw in keywords[:5] if kw.strip()]
+    if not tag_targets:
+        log.info("[devto-search] strategy %d — no usable keyword tags, skipping", strategy.id)
+        return 0
+
+    all_posts: list[dict] = []
+    for tag in tag_targets:
+        for post in fetch_devto_posts(tag, limit=15):
+            if post["external_id"] not in seen_ids:
+                seen_ids.add(post["external_id"])
+                all_posts.append(post)
+
+    log.info("[devto-search] strategy %d — tags=%s fetched=%d threshold=%.2f",
+             strategy.id, tag_targets, len(all_posts), threshold)
+
+    fetched_total = len(all_posts)
+    for post in all_posts:
         ext_id = post["external_id"]
-        if ext_id in seen_ids:
-            continue
-        seen_ids.add(ext_id)
         try:
             scored = score_post(
                 post["content"], keywords,
@@ -803,6 +886,69 @@ def _search_telegram_for_strategy(strategy: BusinessStrategy, db) -> int:
     return saved
 
 
+def _search_linkedin_for_strategy(strategy: BusinessStrategy, db) -> int:
+    """Search LinkedIn via DuckDuckGo for buyer intent posts."""
+    phrases = list(strategy.buyer_phrases or [])
+    keywords = list(strategy.keywords or [])
+    if not phrases and not keywords:
+        return 0
+
+    biz = {
+        "main_problem": strategy.main_problem or "",
+        "ideal_customer": strategy.ideal_customer or "",
+        "buyer_phrases": phrases,
+        "keywords": keywords,
+        "intent_threshold": strategy.intent_threshold,
+    }
+    target_locations = [str(loc).strip() for loc in (strategy.target_locations or [])]
+    threshold = _effective_threshold(strategy, multiplier=0.5)
+
+    # Build targeted queries from buyer phrases + keywords
+    kw_str = " ".join(keywords[:4]) if keywords else ""
+    queries = [p for p in phrases[:3]] + ([kw_str] if kw_str else [])
+
+    saved = 0
+    seen_ids: set[str] = set()
+    fetched_total = 0
+    filtered_total = 0
+
+    for query in queries:
+        if not query.strip():
+            continue
+        for post in search_linkedin_posts(query, limit=10):
+            fetched_total += 1
+            ext_id = post["external_id"]
+            if ext_id in seen_ids:
+                continue
+            seen_ids.add(ext_id)
+            try:
+                scored = score_post(
+                    post["content"], keywords,
+                    main_problem=biz["main_problem"],
+                    ideal_customer=biz["ideal_customer"],
+                    buyer_phrases=phrases,
+                )
+                intent = float(scored.get("intent_score", 0))
+                if intent < threshold:
+                    filtered_total += 1
+                    continue
+
+                author_location = (scored.get("contact") or {}).get("location")
+                if not _location_matches(author_location, target_locations):
+                    continue
+
+                if _save_lead(db, strategy.user_id, "linkedin", ext_id,
+                              post["content"], scored, post,
+                              strategy_id=strategy.id, biz=biz):
+                    saved += 1
+            except Exception:
+                log.exception("LinkedIn search scoring failed for post %s", ext_id)
+
+    log.info("[linkedin-search] strategy %d — fetched=%d filtered=%d leads=%d threshold=%.2f",
+             strategy.id, fetched_total, filtered_total, saved, threshold)
+    return saved
+
+
 def _search_jobboards_for_strategy(strategy: BusinessStrategy, db) -> int:
     keywords = list(strategy.keywords or [])
     phrases = list(strategy.buyer_phrases or [])
@@ -892,10 +1038,11 @@ def run_sync() -> None:
         _search_fns = [
             ("reddit",        _search_reddit_for_strategy,        lambda s: bool(s.buyer_phrases)),
             ("quora",         _search_quora_for_strategy,         lambda s: bool(s.keywords or s.buyer_phrases)),
+            ("linkedin",      _search_linkedin_for_strategy,      lambda s: bool(s.keywords or s.buyer_phrases)),
             ("hackernews",    _search_hackernews_for_strategy,     lambda s: bool(s.keywords or s.buyer_phrases)),
             ("stackoverflow", _search_stackoverflow_for_strategy,  lambda s: bool(s.keywords or s.buyer_phrases)),
             ("github",        _search_github_for_strategy,         lambda s: bool(s.keywords or s.buyer_phrases)),
-            ("devto",         _search_devto_for_strategy,          lambda s: bool(s.keywords or s.buyer_phrases)),
+            ("devto",         _search_devto_for_strategy,          lambda s: bool(s.keywords)),
             ("indiehackers",  _search_indiehackers_for_strategy,   lambda s: bool(s.keywords or s.buyer_phrases)),
             ("telegram",      _search_telegram_for_strategy,       lambda s: bool(s.keywords or s.buyer_phrases)),
             ("job_board",     _search_jobboards_for_strategy,      lambda s: bool(s.keywords or s.buyer_phrases)),

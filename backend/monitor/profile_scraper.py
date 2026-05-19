@@ -198,6 +198,31 @@ def fetch_website_contact(url: str) -> list[str]:
     return texts
 
 
+def try_hunter_enrich(author_name: str, profile_texts: list[str]) -> str | None:
+    """Given an author name and their scraped profile texts, try Hunter.io
+    to find a business email.  Extracts the first non-social domain found in
+    the texts and queries Hunter.io with name + domain.
+    Returns an email string or None if nothing found / key not configured.
+    """
+    if not author_name or not profile_texts:
+        return None
+    for text in profile_texts:
+        for url in re.findall(r"https?://[^\s\"'>]+", text):
+            try:
+                from urllib.parse import urlparse
+                domain = urlparse(url).netloc.lower().lstrip("www.")
+                if not domain:
+                    continue
+                if any(s in domain for s in _SKIP_DOMAINS):
+                    continue
+                email = hunt_email_hunter(author_name, domain)
+                if email:
+                    return email
+            except Exception:
+                continue
+    return None
+
+
 def hunt_email_hunter(full_name: str, domain: str) -> str | None:
     """Use Hunter.io email finder API to find email for a person at a domain."""
     from backend.database import settings
