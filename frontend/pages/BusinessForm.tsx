@@ -388,13 +388,43 @@ export default function BusinessForm() {
                       Adjust keywords and buyer phrases to improve lead quality.
                     </p>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => setShowNewForm(true)}
-                    className="text-xs text-indigo-600 hover:underline"
-                  >
-                    + New strategy
-                  </button>
+                  <div className="flex items-center gap-3">
+                    {deleteConfirm ? (
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs text-gray-500">Sure?</span>
+                        <button
+                          type="button"
+                          onClick={handleDeleteStrategy}
+                          disabled={deleting}
+                          className="text-xs font-medium text-white bg-red-500 hover:bg-red-600 disabled:opacity-50 px-2.5 py-1 rounded-md"
+                        >
+                          {deleting ? "Deleting…" : "Yes, delete"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setDeleteConfirm(false)}
+                          className="text-xs text-gray-400 hover:text-gray-600"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => setDeleteConfirm(true)}
+                        className="text-xs font-medium text-red-500 hover:text-red-700 border border-red-200 hover:border-red-400 px-2.5 py-1 rounded-md transition-colors"
+                      >
+                        🗑 Delete
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => setShowNewForm(true)}
+                      className="text-xs text-indigo-600 hover:underline"
+                    >
+                      + New strategy
+                    </button>
+                  </div>
                 </div>
 
                 {editStatus && <div className="mb-4"><Alert type={editStatus.type} message={editStatus.message} /></div>}
@@ -487,36 +517,6 @@ export default function BusinessForm() {
                     {editSaving ? "Saving…" : "Save strategy settings"}
                   </button>
 
-                  <div className="flex items-center justify-center pt-1 border-t border-gray-100">
-                    {deleteConfirm ? (
-                      <div className="flex items-center gap-3">
-                        <span className="text-xs text-gray-500">Delete this strategy and all its leads?</span>
-                        <button
-                          type="button"
-                          onClick={handleDeleteStrategy}
-                          disabled={deleting}
-                          className="text-xs font-medium text-red-600 hover:text-red-700 disabled:opacity-50"
-                        >
-                          {deleting ? "Deleting…" : "Yes, delete"}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setDeleteConfirm(false)}
-                          className="text-xs text-gray-400 hover:text-gray-600"
-                        >
-                          Cancel
-                        </button>
-                      </div>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={() => setDeleteConfirm(true)}
-                        className="text-xs text-red-500 hover:text-red-700 transition-colors"
-                      >
-                        Delete strategy
-                      </button>
-                    )}
-                  </div>
                 </form>
               </div>
             )}
