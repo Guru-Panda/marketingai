@@ -432,7 +432,7 @@ export default function SuggestedChannels() {
       if (strategyFilter) params.set("strategy_id", strategyFilter);
       const qs = params.toString();
       const data = await api.get<SuggestedChannel[]>(
-        `/suggested-channels/${qs ? `?${qs}` : ""}`,
+        `/suggested-channels${qs ? `?${qs}` : ""}`,
         auth.accessToken()
       );
       setChannels(data);
@@ -511,7 +511,7 @@ export default function SuggestedChannels() {
         status: "watching",
       };
       if (addForm.strategy_id) body.strategy_id = Number(addForm.strategy_id);
-      const ch = await api.post<SuggestedChannel>("/suggested-channels/", body, auth.accessToken());
+      const ch = await api.post<SuggestedChannel>("/suggested-channels", body, auth.accessToken());
       setChannels((prev) => [ch, ...prev]);
       setAddForm({ name: "", url: "", platform_type: "reddit", strategy_id: "" });
       setShowAddForm(false);

@@ -26,6 +26,11 @@ _PLATFORM_MAP = {
     "linkedin_groups": "linkedin",
     "job_boards": "job_board",
     "quora_topics": "quora",
+    "hackernews_topics": "hackernews",
+    "stackoverflow_tags": "stackoverflow",
+    "devto_tags": "devto",
+    "github_repos": "github",
+    "indiehackers_groups": "indiehackers",
 }
 
 
@@ -100,7 +105,7 @@ def create_strategy_from_text(
 
 # ── Manual CRUD ───────────────────────────────────────────────────────────────
 
-@router.post("/", response_model=StrategyResponse, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=StrategyResponse, status_code=status.HTTP_201_CREATED)
 def create_strategy(
     body: StrategyCreate,
     db: Session = Depends(get_db),
@@ -113,7 +118,7 @@ def create_strategy(
     return strategy
 
 
-@router.get("/", response_model=list[StrategyResponse])
+@router.get("", response_model=list[StrategyResponse])
 def list_strategies(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_verified_user),

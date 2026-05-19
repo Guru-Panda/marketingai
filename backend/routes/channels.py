@@ -99,7 +99,7 @@ def ensure_channel_from_suggested(
 router = APIRouter(prefix="/channels", tags=["channels"])
 
 
-@router.post("/", response_model=TrackedChannelResponse, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=TrackedChannelResponse, status_code=status.HTTP_201_CREATED)
 def create_tracked_channel(
     body: TrackedChannelCreate,
     db: Session = Depends(get_db),
@@ -124,7 +124,7 @@ def create_tracked_channel(
     return channel
 
 
-@router.get("/", response_model=list[TrackedChannelResponse])
+@router.get("", response_model=list[TrackedChannelResponse])
 def list_tracked_channels(
     platform_type: Optional[str] = None,
     is_active: Optional[bool] = None,
@@ -241,7 +241,7 @@ def delete_tracked_channel(
 suggested_router = APIRouter(prefix="/suggested-channels", tags=["suggested-channels"])
 
 
-@suggested_router.post("/", response_model=ChannelResponse, status_code=status.HTTP_201_CREATED)
+@suggested_router.post("", response_model=ChannelResponse, status_code=status.HTTP_201_CREATED)
 def create_suggested_channel(
     body: ChannelCreate,
     db: Session = Depends(get_db),
@@ -254,7 +254,7 @@ def create_suggested_channel(
     return channel
 
 
-@suggested_router.get("/", response_model=list[ChannelResponse])
+@suggested_router.get("", response_model=list[ChannelResponse])
 def list_suggested_channels(
     platform_type: Optional[str] = None,
     status: Optional[ChannelStatus] = None,

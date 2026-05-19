@@ -54,7 +54,7 @@ _DEMO_LEADS = [
 ]
 
 
-@router.post("/", response_model=LeadResponse, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=LeadResponse, status_code=status.HTTP_201_CREATED)
 def create_lead(
     body: LeadCreate,
     db: Session = Depends(get_db),
@@ -69,7 +69,7 @@ def create_lead(
 
 
 
-@router.get("/", response_model=list[LeadResponse])
+@router.get("", response_model=list[LeadResponse])
 def list_leads(
     platform: Optional[str] = None,
     status: Optional[LeadStatus] = None,

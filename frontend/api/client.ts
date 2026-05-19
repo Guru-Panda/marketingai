@@ -1,4 +1,6 @@
-const BASE = import.meta.env.VITE_API_URL ?? "http://localhost:8000";
+// In production on Vercel, API calls go to /api/* which Vercel proxies to Railway.
+// In local dev, VITE_API_URL points to localhost:8000 directly.
+const BASE = (import.meta.env.VITE_API_URL || "/api").replace(/\/$/, "");
 
 type Method = "GET" | "POST" | "PATCH" | "DELETE";
 
@@ -13,7 +15,10 @@ async function request<T>(
   };
   if (token) headers["Authorization"] = `Bearer ${token}`;
 
-  const res = await fetch(`${BASE}${path}`, {
+  // Strip trailing slash before query string to avoid FastAPI 307 redirects
+  // breaking the Vercel proxy (redirect loses the /api/ prefix)
+  const cleanPath = path.replace(/\/(\?|$)/, "$1");
+  const res = await fetch(`${BASE}${cleanPath}`, {
     method,
     headers,
     body: body !== undefined ? JSON.stringify(body) : undefined,
@@ -51,9 +56,10 @@ export const api = {
 // ── Token storage ────────────────────────────────────────────────────────────
 
 export const auth = {
-  save(access: string, refresh: string) {
+  save(access: string, refresh: string, email?: string) {
     localStorage.setItem("access_token", access);
     localStorage.setItem("refresh_token", refresh);
+    if (email) localStorage.setItem("user_email", email);
   },
   accessToken: () => localStorage.getItem("access_token") ?? undefined,
   refreshToken: () => localStorage.getItem("refresh_token") ?? undefined,
