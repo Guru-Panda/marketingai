@@ -195,6 +195,28 @@ export default function BusinessForm() {
   const [editSaving, setEditSaving] = useState(false);
   const [editStatus, setEditStatus] = useState<{ type: "success" | "error"; message: string } | null>(null);
   const [showNewForm, setShowNewForm] = useState(false);
+  const [deleteConfirm, setDeleteConfirm] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+
+  // Suggested channels for the currently-selected strategy
+  const [editSuggestedChannels, setEditSuggestedChannels] = useState<SuggestedChannel[]>([]);
+  const [suggestionsLoading, setSuggestionsLoading] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+
+  const loadSuggestedChannels = useCallback(async (strategyId: number) => {
+    setSuggestionsLoading(true);
+    try {
+      const data = await api.get<SuggestedChannel[]>(
+        `/suggested-channels?strategy_id=${strategyId}&status=pending`,
+        auth.accessToken()
+      );
+      setEditSuggestedChannels(data);
+    } catch {
+      setEditSuggestedChannels([]);
+    } finally {
+      setSuggestionsLoading(false);
+    }
+  }, []);
 
   const loadStrategy = useCallback(async (id: number) => {
     const s = await api.get<Strategy>(`/business/${id}`, auth.accessToken());
@@ -203,7 +225,10 @@ export default function BusinessForm() {
     setEditBuyer(s.buyer_phrases ?? []);
     setEditExclude(s.exclude_keywords ?? []);
     setEditThreshold(s.intent_threshold ?? 0.7);
-  }, []);
+    setDeleteConfirm(false);
+    setEditStatus(null);
+    loadSuggestedChannels(id);
+  }, [loadSuggestedChannels]);
 
   useEffect(() => {
     api.get<StrategyTitle[]>("/business/titles", auth.accessToken())
@@ -231,6 +256,56 @@ export default function BusinessForm() {
       setEditStatus({ type: "error", message: err instanceof Error ? err.message : "Failed to save" });
     } finally {
       setEditSaving(false);
+    }
+  }
+
+  async function handleDeleteStrategy() {
+    if (!editStrategy) return;
+    setDeleting(true);
+    setEditStatus(null);
+    try {
+      await api.delete(`/business/${editStrategy.id}`, auth.accessToken());
+      const updated = existingStrategies.filter((s) => s.id !== editStrategy.id);
+      setExistingStrategies(updated);
+      setDeleteConfirm(false);
+      if (updated.length > 0) {
+        loadStrategy(updated[0].id);
+      } else {
+        setEditStrategy(null);
+        setShowNewForm(true);
+      }
+    } catch (err) {
+      setEditStatus({ type: "error", message: err instanceof Error ? err.message : "Failed to delete strategy" });
+      setDeleteConfirm(false);
+    } finally {
+      setDeleting(false);
+    }
+  }
+
+  async function handleRefreshSuggestions() {
+    if (!editStrategy) return;
+    setRefreshing(true);
+    try {
+      await api.post(
+        `/suggested-channels/refresh?strategy_id=${editStrategy.id}`,
+        {},
+        auth.accessToken()
+      );
+      await loadSuggestedChannels(editStrategy.id);
+    } catch (err) {
+      setEditStatus({ type: "error", message: err instanceof Error ? err.message : "Failed to refresh suggestions" });
+    } finally {
+      setRefreshing(false);
+    }
+  }
+
+  async function handleEditChannelAction(id: number, status: "watching" | "rejected") {
+    try {
+      await api.patch(`/suggested-channels/${id}`, { status }, auth.accessToken());
+      // Remove from the pending list immediately — it's no longer pending
+      setEditSuggestedChannels((prev) => prev.filter((c) => c.id !== id));
+    } catch {
+      // leave the card in place so the user can retry
     }
   }
 
@@ -411,7 +486,96 @@ export default function BusinessForm() {
                   >
                     {editSaving ? "Saving…" : "Save strategy settings"}
                   </button>
+
+                  <div className="flex items-center justify-center pt-1 border-t border-gray-100">
+                    {deleteConfirm ? (
+                      <div className="flex items-center gap-3">
+                        <span className="text-xs text-gray-500">Delete this strategy and all its leads?</span>
+                        <button
+                          type="button"
+                          onClick={handleDeleteStrategy}
+                          disabled={deleting}
+                          className="text-xs font-medium text-red-600 hover:text-red-700 disabled:opacity-50"
+                        >
+                          {deleting ? "Deleting…" : "Yes, delete"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setDeleteConfirm(false)}
+                          className="text-xs text-gray-400 hover:text-gray-600"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => setDeleteConfirm(true)}
+                        className="text-xs text-red-500 hover:text-red-700 transition-colors"
+                      >
+                        Delete strategy
+                      </button>
+                    )}
+                  </div>
                 </form>
+              </div>
+            )}
+
+            {/* Suggested channels for existing strategy */}
+            {editStrategy && !result && !showNewForm && (
+              <div className="bg-white border border-gray-200 rounded-xl p-6 mt-4">
+                <div className="flex items-center justify-between mb-4">
+                  <div>
+                    <h3 className="text-sm font-semibold text-gray-900">Suggested channels</h3>
+                    <p className="text-xs text-gray-400 mt-0.5">
+                      Pending suggestions for this strategy. Hit Refresh to get a fresh AI batch.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleRefreshSuggestions}
+                    disabled={refreshing}
+                    className="flex items-center gap-1.5 text-xs font-medium text-indigo-600 hover:text-indigo-700 disabled:opacity-50 border border-indigo-200 hover:border-indigo-400 px-3 py-1.5 rounded-md transition-colors"
+                  >
+                    {refreshing ? (
+                      <>
+                        <svg className="w-3.5 h-3.5 animate-spin" viewBox="0 0 24 24" fill="none">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3V4a8 8 0 00-8 8z" />
+                        </svg>
+                        Refreshing…
+                      </>
+                    ) : (
+                      <>
+                        <svg className="w-3.5 h-3.5" viewBox="0 0 20 20" fill="currentColor">
+                          <path fillRule="evenodd" d="M4 2a1 1 0 011 1v2.101a7.002 7.002 0 0111.601 2.566 1 1 0 11-1.885.666A5.002 5.002 0 005.999 7H9a1 1 0 010 2H4a1 1 0 01-1-1V3a1 1 0 011-1zm.008 9.057a1 1 0 011.276.61A5.002 5.002 0 0014.001 13H11a1 1 0 110-2h5a1 1 0 011 1v5a1 1 0 11-2 0v-2.101a7.002 7.002 0 01-11.601-2.566 1 1 0 01.61-1.276z" clipRule="evenodd" />
+                        </svg>
+                        Refresh suggestions
+                      </>
+                    )}
+                  </button>
+                </div>
+
+                {suggestionsLoading ? (
+                  <div className="flex items-center gap-2 text-sm text-gray-400 py-4 justify-center">
+                    <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3V4a8 8 0 00-8 8z" />
+                    </svg>
+                    Loading suggestions…
+                  </div>
+                ) : editSuggestedChannels.length === 0 ? (
+                  <div className="text-center py-6">
+                    <p className="text-sm text-gray-400">No pending suggestions.</p>
+                    <p className="text-xs text-gray-300 mt-1">Click "Refresh suggestions" to generate a new batch with AI.</p>
+                  </div>
+                ) : (
+                  <div className="flex flex-col gap-2">
+                    {editSuggestedChannels.map((ch) => (
+                      <ChannelCard key={ch.id} channel={ch} onAction={handleEditChannelAction} />
+                    ))}
+                  </div>
+                )}
               </div>
             )}
 
