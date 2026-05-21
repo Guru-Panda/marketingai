@@ -1,16 +1,35 @@
 import threading
 from fastapi import APIRouter, Depends
+from sqlalchemy.orm import Session
+
+from backend.database import get_db
 from backend.dependencies import get_verified_user
-from backend.model import User
+from backend.model import Lead, LeadStatus, User
 from backend.monitor.sync import get_sync_stats, run_sync
 
 router = APIRouter(prefix="/monitor", tags=["monitor"])
 
 
 @router.get("/status")
-def get_monitor_status(current_user: User = Depends(get_verified_user)):
-    """Return sync heartbeat — last run time, posts scanned, leads found."""
-    return get_sync_stats()
+def get_monitor_status(
+    current_user: User = Depends(get_verified_user),
+    db: Session = Depends(get_db),
+):
+    """Return sync heartbeat — last run time, posts scanned, leads found.
+
+    new_leads is the count of 'new'-status leads owned by the current user,
+    sourced directly from the database.  This is always accurate regardless of
+    how many sync runs have happened or whether other users share the deployment.
+    """
+    stats = get_sync_stats()
+    # Replace the global in-memory counter with the real per-user figure so the
+    # banner matches exactly what appears in the leads table.
+    stats["new_leads"] = (
+        db.query(Lead)
+        .filter(Lead.user_id == current_user.id, Lead.status == LeadStatus.new)
+        .count()
+    )
+    return stats
 
 
 @router.post("/sync", status_code=202)

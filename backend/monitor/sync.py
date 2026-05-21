@@ -1013,6 +1013,10 @@ def run_sync() -> None:
     import time as _time
     _sync_stats["is_running"] = True
     _sync_stats["last_sync_at"] = datetime.now(timezone.utc).isoformat()
+    # Reset per-sync counters so the banner shows THIS run's numbers, not a
+    # cumulative total since last server restart.
+    _sync_stats["new_leads"] = 0
+    _sync_stats["posts_scanned"] = 0
     t0 = _time.monotonic()
 
     db = SessionLocal()
