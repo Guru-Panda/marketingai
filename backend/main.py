@@ -7,6 +7,8 @@ from apscheduler.triggers.interval import IntervalTrigger
 from fastapi import FastAPI, Request
 from fastapi.responses import RedirectResponse, Response
 
+import logging
+
 from backend.channel_refresh import refresh_suggested_channels
 from backend.data_retention import delete_old_leads
 from backend.database import Base, engine, settings
@@ -15,8 +17,7 @@ from backend.monitor.sync import run_sync
 from backend.routes import auth, business, channels, leads, users
 from backend.routes import admin, analytics, monitor
 
-Base.metadata.create_all(bind=engine)
-run_migrations()
+log = logging.getLogger(__name__)
 
 _scheduler = AsyncIOScheduler(timezone="UTC")
 _scheduler.add_job(
@@ -48,6 +49,14 @@ _scheduler.add_job(
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    # Run DB init inside lifespan so a slow/unreachable DB at startup doesn't
+    # block the process from binding the port and passing the healthcheck.
+    try:
+        Base.metadata.create_all(bind=engine)
+        run_migrations()
+        log.info("Database initialised successfully")
+    except Exception as exc:
+        log.error("DB init failed (will retry on first request): %s", exc)
     _scheduler.start()
     yield
     _scheduler.shutdown(wait=False)
