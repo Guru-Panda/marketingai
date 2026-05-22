@@ -29,6 +29,14 @@ def get_monitor_status(
         .filter(Lead.user_id == current_user.id, Lead.status == LeadStatus.new)
         .count()
     )
+    # Diagnostic: total leads in DB for this user across all statuses.
+    # If new_leads > 0 but total_leads == 0, leads belong to a different user.
+    # If total_leads > 0 but the table is empty, the list query has a bug.
+    stats["total_leads"] = (
+        db.query(Lead)
+        .filter(Lead.user_id == current_user.id)
+        .count()
+    )
     return stats
 
 

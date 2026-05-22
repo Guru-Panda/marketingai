@@ -1,8 +1,9 @@
 import logging
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Request
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 from backend.database import get_db, settings
-from backend.model import User
+from backend.model import Lead, User
 from backend.rate_limit import check_rate_limit
 from backend.schemas import UserProfile
 
@@ -35,6 +36,19 @@ def trigger_channel_refresh(background_tasks: BackgroundTasks):
     from backend.channel_refresh import refresh_suggested_channels
     background_tasks.add_task(refresh_suggested_channels)
     return {"detail": "Channel refresh started in background"}
+
+
+@router.get("/leads-by-user", dependencies=[Depends(_require_admin)])
+def leads_by_user(db: Session = Depends(get_db)):
+    """Show lead counts per user — use this to diagnose why a user sees no leads."""
+    rows = (
+        db.query(User.id, User.email, func.count(Lead.id).label("total_leads"))
+        .outerjoin(Lead, Lead.user_id == User.id)
+        .group_by(User.id, User.email)
+        .order_by(func.count(Lead.id).desc())
+        .all()
+    )
+    return [{"user_id": r[0], "email": r[1], "total_leads": r[2]} for r in rows]
 
 
 @router.get("/debug-scorer", dependencies=[Depends(_require_admin)])
