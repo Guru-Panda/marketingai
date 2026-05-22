@@ -3,7 +3,7 @@
   "outputDirectory": "dist",
   "framework": "vite",
   "rewrites": [
-    { "source": "/api/:path*", "destination": "https://fabulous-charisma-production-0270.up.railway.app/:path*" },
+    { "source": "/api/:path*", "destination": "https://backend-production-1952b.up.railway.app/:path*" },
     { "source": "/(.*)", "destination": "/index.html" }
   ]
 }
