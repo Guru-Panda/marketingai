@@ -82,6 +82,20 @@ class UserProfile(BaseModel):
 
     model_config = {"from_attributes": True}
 
+    @classmethod
+    def from_user(cls, user) -> "UserProfile":
+        return cls(
+            id=user.id,
+            email=user.email,
+            is_verified=user.is_verified,
+            company_name=user.company_name,
+            employee_count=user.employee_count,
+            notes=user.notes,
+            retention_days=user.retention_days,
+            created_at=user.created_at,
+            has_strategy=len(user.strategies) > 0,
+        )
+
 
 class UserUpdate(BaseModel):
     company_name: str | None = None

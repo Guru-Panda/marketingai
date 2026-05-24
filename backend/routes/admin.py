@@ -1,7 +1,7 @@
 import logging
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Request
 from sqlalchemy import func
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 from backend.database import get_db, settings
 from backend.model import Lead, User
 from backend.rate_limit import check_rate_limit
@@ -19,7 +19,8 @@ def _require_admin(request: Request, x_admin_key: str = Header(...)):
 
 @router.get("/users", response_model=list[UserProfile], dependencies=[Depends(_require_admin)])
 def list_users(db: Session = Depends(get_db)):
-    return db.query(User).order_by(User.created_at.desc()).all()
+    users = db.query(User).options(selectinload(User.strategies)).order_by(User.created_at.desc()).all()
+    return [UserProfile.from_user(u) for u in users]
 
 
 @router.post("/sync", dependencies=[Depends(_require_admin)])
